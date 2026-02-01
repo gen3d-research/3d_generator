@@ -11,7 +11,13 @@ from typing import List, Optional, Dict, Generator
 from dataclasses import dataclass
 import json
 
-from primitives import CompositeObject, create_simple_box, create_mug_like, create_l_shape
+from primitives import (
+    CompositeObject, create_simple_box, create_mug_like, create_l_shape, 
+    create_dumbbell, create_hammer, create_bottle,
+    create_t_shape, create_u_shape, create_v_shape, create_monitor,
+    create_barbell, create_snowman, create_camera, create_frying_pan,
+    create_flashlight, create_spatula, create_remote, create_joystick
+)
 from scoring import ObjectScorer, ScoreBreakdown, ScoringConfig
 from cem import CEMOptimizer, CEMConfig, ParameterDistribution
 from export import URDFExporter, BatchExporter, ExportConfig
@@ -24,6 +30,7 @@ class GeneratorConfig:
     cem_iterations: int = 50
     cem_samples: int = 100
     elite_fraction: float = 0.2
+    learning_rate: float = 0.7
     
     # Scoring thresholds
     min_extent: float = 0.02
@@ -94,10 +101,12 @@ class RoboticObjectGenerator:
             n_iterations=n_iterations or self.config.cem_iterations,
             n_samples=n_samples or self.config.cem_samples,
             elite_fraction=self.config.elite_fraction,
+            learning_rate=self.config.learning_rate,
             seed=self.config.seed
         )
         
-        optimizer = CEMOptimizer(cem_config, self.scoring_config)
+        optimizer = CEMOptimizer(cem_config, self.scoring_config, 
+                               initial_distribution=self.distribution)
         
         def callback(iteration, mean_score, dist):
             if verbose:
@@ -326,4 +335,98 @@ def create_archetype_set(output_dir: str) -> Dict[str, Path]:
     paths = exporter.export(obj, output_dir / "l_shape", "l_shape")
     results['l_shape'] = paths['urdf']
     
+    # Dumbbell
+    obj = create_dumbbell()
+    obj.name = "dumbbell"
+    paths = exporter.export(obj, output_dir / "dumbbell", "dumbbell")
+    results['dumbbell'] = paths['urdf']
+
+    # Hammer
+    obj = create_hammer()
+    obj.name = "hammer"
+    paths = exporter.export(obj, output_dir / "hammer", "hammer")
+    results['hammer'] = paths['urdf']
+    
+    # Bottle
+    obj = create_bottle()
+    obj.name = "bottle"
+    paths = exporter.export(obj, output_dir / "bottle", "bottle")
+    results['bottle'] = paths['urdf']
+    
+    # ---------------------------
+    # New Archetypes (9-20)
+    # ---------------------------
+    
+    # T-shape
+    obj = create_t_shape()
+    obj.name = "t_shape"
+    paths = exporter.export(obj, output_dir / "t_shape", "t_shape")
+    results['t_shape'] = paths['urdf']
+    
+    # U-shape
+    obj = create_u_shape()
+    obj.name = "u_shape"
+    paths = exporter.export(obj, output_dir / "u_shape", "u_shape")
+    results['u_shape'] = paths['urdf']
+    
+    # V-shape
+    obj = create_v_shape()
+    obj.name = "v_shape"
+    paths = exporter.export(obj, output_dir / "v_shape", "v_shape")
+    results['v_shape'] = paths['urdf']
+    
+    # Monitor
+    obj = create_monitor()
+    obj.name = "monitor"
+    paths = exporter.export(obj, output_dir / "monitor", "monitor")
+    results['monitor'] = paths['urdf']
+    
+    # Barbell
+    obj = create_barbell()
+    obj.name = "barbell"
+    paths = exporter.export(obj, output_dir / "barbell", "barbell")
+    results['barbell'] = paths['urdf']
+    
+    # Snowman
+    obj = create_snowman()
+    obj.name = "snowman"
+    paths = exporter.export(obj, output_dir / "snowman", "snowman")
+    results['snowman'] = paths['urdf']
+    
+    # Camera
+    obj = create_camera()
+    obj.name = "camera"
+    paths = exporter.export(obj, output_dir / "camera", "camera")
+    results['camera'] = paths['urdf']
+    
+    # Frying Pan
+    obj = create_frying_pan()
+    obj.name = "frying_pan"
+    paths = exporter.export(obj, output_dir / "frying_pan", "frying_pan")
+    results['frying_pan'] = paths['urdf']
+    
+    # Flashlight
+    obj = create_flashlight()
+    obj.name = "flashlight"
+    paths = exporter.export(obj, output_dir / "flashlight", "flashlight")
+    results['flashlight'] = paths['urdf']
+    
+    # Spatula
+    obj = create_spatula()
+    obj.name = "spatula"
+    paths = exporter.export(obj, output_dir / "spatula", "spatula")
+    results['spatula'] = paths['urdf']
+    
+    # Remote
+    obj = create_remote()
+    obj.name = "remote"
+    paths = exporter.export(obj, output_dir / "remote", "remote")
+    results['remote'] = paths['urdf']
+    
+    # Joystick
+    obj = create_joystick()
+    obj.name = "joystick"
+    paths = exporter.export(obj, output_dir / "joystick", "joystick")
+    results['joystick'] = paths['urdf']
+
     return results

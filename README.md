@@ -52,6 +52,31 @@ python main.py demo
 python main.py archetypes -o output/archetypes
 ```
 
+### Reproducing Paper Results
+
+To generate the figures and evaluations presented in the paper:
+
+```bash
+# Generate figures and examples
+python scripts/generate_figures.py
+
+# Run baseline comparison
+python scripts/evaluate_methods.py
+
+# Run large-scale archetype experiment (20 archetypes, 10k objects each)
+python scripts/run_scale_experiment.py -n 10000 --iterations 30 --train
+
+# Run baseline comparison (CEM vs Random)
+python scripts/evaluate_methods.py
+
+# Run ablation study on stability
+python scripts/run_ablation.py
+
+# OR simply run the unified reproduction script:
+./scripts/reproduce_paper.sh
+
+```
+
 ## How It Works
 
 ### 1. Parametric Object Representation
@@ -83,7 +108,7 @@ Generated objects are exported with:
 - Visual mesh (OBJ/STL)
 - Simplified collision mesh
 - Mass and inertia tensor (computed from shape + density)
-- Surface properties (friction, restitution)
+- Surface properties (friction, restitution) - Randomized friction coefficients ($0.1$ to $2.0$)
 - Ready for Gazebo simulation and MoveIt planning
 
 ## Project Structure
@@ -163,7 +188,6 @@ If you use this in research, please cite:
 @inproceedings{generative3d2025,
   title={Generative 3D Object Modeling for Robust Robot Manipulation in ROS 2},
   author={...},
-  booktitle={IEEE International Conference on Automation Science and Engineering},
   year={2025}
 }
 ```

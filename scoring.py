@@ -267,21 +267,50 @@ class ObjectScorer:
         # For antipodal: n1 · n2 ≈ -1
         normal_dots = normals @ normals.T
         
-        # Find valid antipodal pairs
-        valid_distance = (
-            (distances > self.config.gripper_width_min) & 
-            (distances < self.config.gripper_width_max)
-        )
-        valid_normal = normal_dots < -self.config.normal_alignment_thresh
+        # Soft alignment score: map [-1, -0.9] to [1, 0] roughly
+        # We want alignment < -0.9.
+        # Let's use sim = -dot. We want sim > 0.9.
+        # Score = clip((sim - 0.5) / 0.4, 0, 1) ? No, let's keep it simple.
+        # Continuous pair score:
         
-        # Count valid pairs (upper triangle only to avoid double counting)
-        valid_pairs = np.triu(valid_distance & valid_normal, k=1)
-        n_pairs = int(np.sum(valid_pairs))
+        sim = -normal_dots
+        alignment_score = np.clip((sim - 0.8) / 0.2, 0, 1) # 0.8->0, 1.0->1
         
-        # Normalize score
-        # Expect ~10-50 pairs for a good graspable object
-        expected_pairs = 30
-        score = min(1.0, n_pairs / expected_pairs)
+        # Distance score
+        # ideal: [min, max]
+        d = distances
+        d_min, d_max = self.config.gripper_width_min, self.config.gripper_width_max
+        
+        # Vectorized distance scoring
+        # If d < min: d/min
+        # If d > max: max/d
+        # Else: 1.0
+        dist_score = np.ones_like(d)
+        mask_small = d < d_min
+        mask_large = d > d_max
+        
+        # Avoid div by zero
+        safe_d = np.maximum(d, 1e-6)
+        
+        dist_score[mask_small] = safe_d[mask_small] / d_min
+        dist_score[mask_large] = d_max / safe_d[mask_large]
+        
+        # Pairwise quality
+        pair_quality = alignment_score * dist_score
+        
+        # Zero out diagonal (self-pairs) and lower triangle
+        np.fill_diagonal(pair_quality, 0)
+        pair_quality = np.triu(pair_quality)
+        
+        # Total quality is average of top N best pairs? 
+        # Or sum normalized by expected?
+        # Let's stick to "sum of quality" normalized.
+        
+        total_quality = np.sum(pair_quality)
+        expected_quality = 30.0 # Same baseline as before
+        
+        score = min(1.0, total_quality / expected_quality)
+        n_pairs = int(np.sum(pair_quality > 0.9)) # Count high quality ones for stats
         
         return score, n_pairs
     

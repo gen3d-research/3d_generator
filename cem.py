@@ -67,6 +67,11 @@ class ParameterDistribution:
     
     # Rotation (euler angles, radians)
     rotation_std: float = 0.3  # Std for rotation angles
+
+    # Friction coefficient (LogUniform-ish via normal in log space? Or just trunc normal)
+    # Using normal distribution centered around common friction values
+    friction_mean: float = 0.8
+    friction_std: float = 0.2
     
     def sample_n_primitives(self, rng: np.random.Generator) -> int:
         """Sample number of primitives."""
@@ -167,7 +172,10 @@ class ParameterDistribution:
             prim.transform.translation[2] = max(0.01, prim.transform.translation[2])
             primitives.append(prim)
         
-        return CompositeObject(primitives=primitives, name=name)
+        # Sample friction
+        friction = np.clip(rng.normal(self.friction_mean, self.friction_std), 0.1, 2.0)
+        
+        return CompositeObject(primitives=primitives, name=name, friction=friction)
     
     def to_dict(self) -> Dict:
         """Serialize to dictionary."""
@@ -187,7 +195,9 @@ class ParameterDistribution:
             'capsule_height_mean': float(self.capsule_height_mean),
             'capsule_height_std': float(self.capsule_height_std),
             'offset_std': float(self.offset_std),
-            'rotation_std': float(self.rotation_std)
+            'rotation_std': float(self.rotation_std),
+            'friction_mean': float(self.friction_mean),
+            'friction_std': float(self.friction_std)
         }
     
     @classmethod
@@ -209,7 +219,9 @@ class ParameterDistribution:
             capsule_height_mean=d['capsule_height_mean'],
             capsule_height_std=d['capsule_height_std'],
             offset_std=d['offset_std'],
-            rotation_std=d['rotation_std']
+            rotation_std=d['rotation_std'],
+            friction_mean=d.get('friction_mean', 0.8),
+            friction_std=d.get('friction_std', 0.2)
         )
 
 
@@ -232,13 +244,14 @@ class CEMOptimizer:
     objects with high manipulation scores.
     """
     
-    def __init__(self, config: CEMConfig = None, scoring_config: ScoringConfig = None):
+    def __init__(self, config: CEMConfig = None, scoring_config: ScoringConfig = None,
+                 initial_distribution: ParameterDistribution = None):
         self.config = config or CEMConfig()
         self.scorer = ObjectScorer(scoring_config)
         self.rng = np.random.default_rng(self.config.seed)
         
         # Current distribution
-        self.distribution = ParameterDistribution()
+        self.distribution = initial_distribution or ParameterDistribution()
         
         # History for analysis
         self.history: List[Dict] = []
@@ -282,6 +295,12 @@ class CEMOptimizer:
             elite_scores = scores[elite_indices]
             elite_objects = [candidates[i] for i in elite_indices]
             
+            # Extract component scores for elites
+            elite_breakdowns = [score_breakdowns[i] for i in elite_indices]
+            elite_stability = [b.stability_score for b in elite_breakdowns]
+            elite_graspability = [b.graspability_score for b in elite_breakdowns]
+            elite_size = [b.size_score for b in elite_breakdowns]
+            
             # Update distribution based on elites
             self._update_distribution(elite_objects)
             
@@ -291,6 +310,9 @@ class CEMOptimizer:
                 'mean_score': float(np.mean(scores)),
                 'max_score': float(np.max(scores)),
                 'mean_elite_score': float(np.mean(elite_scores)),
+                'mean_stability': float(np.mean(elite_stability)),
+                'mean_graspability': float(np.mean(elite_graspability)),
+                'mean_size': float(np.mean(elite_size)),
                 'std_score': float(np.std(scores))
             })
             
@@ -298,11 +320,11 @@ class CEMOptimizer:
                 callback(iteration, float(np.mean(elite_scores)), self.distribution)
             
             # Early stopping if converged
-            if len(self.history) > 5:
-                recent_means = [h['mean_elite_score'] for h in self.history[-5:]]
-                if np.std(recent_means) < 0.01:
-                    print(f"Converged at iteration {iteration}")
-                    break
+            # if len(self.history) > 5:
+            #     recent_means = [h['mean_elite_score'] for h in self.history[-5:]]
+            #     if np.std(recent_means) < 0.01:
+            #         print(f"Converged at iteration {iteration}")
+            #         break
         
         return self.distribution
     
@@ -386,6 +408,13 @@ class CEMOptimizer:
             self.distribution.capsule_radius_std = max(min_std, lr * np.std(capsule_params[:, 0]) + (1 - lr) * self.distribution.capsule_radius_std)
             self.distribution.capsule_height_mean = lr * np.mean(capsule_params[:, 1]) + (1 - lr) * self.distribution.capsule_height_mean
             self.distribution.capsule_height_std = max(min_std, lr * np.std(capsule_params[:, 1]) + (1 - lr) * self.distribution.capsule_height_std)
+
+        # Update friction parameters
+        frictions = [obj.friction for obj in elite_objects if hasattr(obj, 'friction')]
+        if frictions:
+            friction_arr = np.array(frictions)
+            self.distribution.friction_mean = lr * np.mean(friction_arr) + (1 - lr) * self.distribution.friction_mean
+            self.distribution.friction_std = max(min_std, lr * np.std(friction_arr) + (1 - lr) * self.distribution.friction_std)
     
     def save(self, path: Path):
         """Save optimizer state to file."""

@@ -97,10 +97,12 @@ class URDFExporter:
         
         # Generate SDF (Gazebo)
         sdf_path = output_dir / f"{name}.sdf"
+        friction_val = getattr(obj, 'friction', self.config.friction_mu1)
         self._write_sdf(
             sdf_path, name, mass, inertia, com,
             f"meshes/{name}_visual.{ext}",
-            f"meshes/{name}_collision.{ext}"
+            f"meshes/{name}_collision.{ext}",
+            friction_coeff=friction_val
         )
         
         # Generate metadata
@@ -187,7 +189,8 @@ class URDFExporter:
     
     def _write_sdf(self, path: Path, name: str, mass: float,
                    inertia: np.ndarray, com: np.ndarray,
-                   visual_mesh_path: str, collision_mesh_path: str):
+                   visual_mesh_path: str, collision_mesh_path: str,
+                   friction_coeff: float = 0.8):
         """Write SDF file (Gazebo format)."""
         sdf = ET.Element('sdf', version='1.7')
         model = ET.SubElement(sdf, 'model', name=name)
@@ -233,8 +236,8 @@ class URDFExporter:
         surface = ET.SubElement(collision, 'surface')
         friction = ET.SubElement(surface, 'friction')
         ode = ET.SubElement(friction, 'ode')
-        ET.SubElement(ode, 'mu').text = f'{self.config.friction_mu1}'
-        ET.SubElement(ode, 'mu2').text = f'{self.config.friction_mu2}'
+        ET.SubElement(ode, 'mu').text = f'{friction_coeff}'
+        ET.SubElement(ode, 'mu2').text = f'{friction_coeff}'
         
         bounce = ET.SubElement(surface, 'bounce')
         ET.SubElement(bounce, 'restitution_coefficient').text = f'{self.config.restitution}'
@@ -272,8 +275,7 @@ class URDFExporter:
                 'approximate_volume_m3': float(obj.total_volume())
             },
             'surface_properties': {
-                'friction_mu1': self.config.friction_mu1,
-                'friction_mu2': self.config.friction_mu2,
+                'friction_mu': getattr(obj, 'friction', self.config.friction_mu1),
                 'restitution': self.config.restitution
             }
         }

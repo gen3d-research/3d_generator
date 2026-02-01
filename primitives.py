@@ -200,6 +200,7 @@ class CompositeObject:
     """
     primitives: List[Primitive] = field(default_factory=list)
     name: str = "generated_object"
+    friction: float = 1.0  # Coulomb friction coefficient
     
     def to_mesh(self, boolean_union: bool = True) -> trimesh.Trimesh:
         """
@@ -355,3 +356,456 @@ def create_l_shape(
     )
     
     return CompositeObject(primitives=[base, upright], name="l_shape")
+
+
+def create_dumbbell(
+    handle_length: float = 0.08,
+    handle_radius: float = 0.01,
+    weight_radius: float = 0.03
+) -> CompositeObject:
+    """Create a dumbbell shape (two spheres connected by a cylinder)."""
+    # Handle
+    handle = Cylinder(
+        radius=handle_radius,
+        height=handle_length,
+        transform=Transform.from_euler(
+            translation=np.array([0, 0, handle_length/2]),
+            euler_xyz=np.array([0, 0, 0])
+        )
+    )
+    
+    # Weights at ends
+    # Bottom weight
+    weight1 = Sphere(
+        radius=weight_radius,
+        transform=Transform(translation=np.array([0, 0, -weight_radius + 0.01])) # Slightly embedded/offset
+    )
+    # Top weight
+    weight2 = Sphere(
+        radius=weight_radius,
+        transform=Transform(translation=np.array([0, 0, handle_length + weight_radius*0.8]))
+    )
+    
+    # Adjust handle to be centered relative to weights? 
+    # Actually let's make it symmetric around Z center usually, but here we build up from Z=0
+    # Let's rebuild:
+    # Weight 1 at Z=R
+    weight1 = Sphere(
+        radius=weight_radius,
+        transform=Transform(translation=np.array([0, 0, weight_radius]))
+    )
+    # Handle on top of weight 1
+    handle = Cylinder(
+        radius=handle_radius,
+        height=handle_length,
+        transform=Transform(translation=np.array([0, 0, weight_radius + handle_length/2]))
+    )
+    # Weight 2 on top of handle
+    weight2 = Sphere(
+        radius=weight_radius,
+        transform=Transform(translation=np.array([0, 0, weight_radius*2 + handle_length]))
+    )
+    
+    return CompositeObject(primitives=[weight1, handle, weight2], name="dumbbell")
+
+
+def create_hammer(
+    handle_length: float = 0.12,
+    handle_radius: float = 0.012,
+    head_dims: np.ndarray = None
+) -> CompositeObject:
+    """Create a hammer-like object (cylinder handle + box head)."""
+    if head_dims is None:
+        head_dims = np.array([0.08, 0.035, 0.035])
+    
+    # Handle (vertical)
+    handle = Cylinder(
+        radius=handle_radius,
+        height=handle_length,
+        transform=Transform(translation=np.array([0, 0, handle_length/2]))
+    )
+    
+    # Head (horizontal box at top)
+    head = Box(
+        dimensions=head_dims,
+        transform=Transform(translation=np.array([0, 0, handle_length + head_dims[2]/2]))
+    )
+    
+    return CompositeObject(primitives=[handle, head], name="hammer")
+
+
+def create_t_shape(
+    h_dims: np.ndarray = None,
+    v_dims: np.ndarray = None
+) -> CompositeObject:
+    """Create a T-shaped object."""
+    if h_dims is None: h_dims = np.array([0.10, 0.03, 0.03]) # Top bar
+    if v_dims is None: v_dims = np.array([0.03, 0.03, 0.08]) # Vertical post
+    
+    # Vertical post centered at origin
+    post = Box(
+        dimensions=v_dims,
+        transform=Transform(translation=np.array([0, 0, v_dims[2]/2]))
+    )
+    
+    # Horizontal bar on top
+    bar = Box(
+        dimensions=h_dims,
+        transform=Transform(translation=np.array([0, 0, v_dims[2] + h_dims[2]/2]))
+    )
+    
+    return CompositeObject(primitives=[post, bar], name="t_shape")
+
+
+def create_u_shape(
+    base_dims: np.ndarray = None,
+    wall_dims: np.ndarray = None
+) -> CompositeObject:
+    """Create a U-shaped object."""
+    if base_dims is None: base_dims = np.array([0.10, 0.04, 0.02])
+    if wall_dims is None: wall_dims = np.array([0.02, 0.04, 0.06])
+    
+    # Base
+    base = Box(
+        dimensions=base_dims,
+        transform=Transform(translation=np.array([0, 0, base_dims[2]/2]))
+    )
+    
+    # Left Wall
+    left = Box(
+        dimensions=wall_dims,
+        transform=Transform(translation=np.array([
+            -base_dims[0]/2 + wall_dims[0]/2, 0, base_dims[2] + wall_dims[2]/2
+        ]))
+    )
+    
+    # Right Wall
+    right = Box(
+        dimensions=wall_dims,
+        transform=Transform(translation=np.array([
+            base_dims[0]/2 - wall_dims[0]/2, 0, base_dims[2] + wall_dims[2]/2
+        ]))
+    )
+    
+    return CompositeObject(primitives=[base, left, right], name="u_shape")
+
+
+def create_v_shape(
+    arm_length: float = 0.08,
+    radius: float = 0.015,
+    angle_deg: float = 45.0
+) -> CompositeObject:
+    """Create a V-shaped object using two capsules."""
+    angle_rad = np.radians(angle_deg)
+    
+    # Left arm (rotated -angle)
+    # Pivot at origin. Center of arm is at length/2 * [sin, 0, cos]
+    # For simplicity, lie flat on table
+    
+    # Let's make it flat on ground (XY plane)
+    # Origin is the "corner".
+    
+    # Left Arm
+    left_tr = Transform.from_euler(
+        translation=np.array([
+            arm_length/2 * np.cos(np.radians(180-angle_deg)), 
+            arm_length/2 * np.sin(np.radians(180-angle_deg)), 
+            radius
+        ]),
+        euler_xyz=np.array([0, np.pi/2, np.radians(angle_deg)]) # Capsule aligns Z default, rotate to XY
+    )
+    left = Capsule(radius=radius, height=arm_length, transform=left_tr)
+
+    # Right Arm
+    right_tr = Transform.from_euler(
+        translation=np.array([
+            arm_length/2 * np.cos(np.radians(angle_deg)), 
+            arm_length/2 * np.sin(np.radians(angle_deg)), 
+            radius
+        ]),
+        euler_xyz=np.array([0, np.pi/2, np.radians(-angle_deg)])
+    )
+    right = Capsule(radius=radius, height=arm_length, transform=right_tr)    
+
+    # Simpler approach: V in XZ plane standing up? No, usually manipulation objects lie flat.
+    # Let's do simple orthogonal V first? 
+    # Let's do standard boomerang shape.
+    
+    return CompositeObject(primitives=[left, right], name="v_shape")
+
+
+def create_monitor(
+    screen_dims: np.ndarray = None,
+    stand_height: float = 0.05
+) -> CompositeObject:
+    """Create a monitor-like object."""
+    if screen_dims is None: screen_dims = np.array([0.12, 0.01, 0.08])
+    
+    # Base plate
+    base = Box(
+        dimensions=np.array([0.06, 0.06, 0.01]),
+        transform=Transform(translation=np.array([0, 0, 0.005]))
+    )
+    
+    # Stand pole
+    pole = Cylinder(
+        radius=0.01,
+        height=stand_height,
+        transform=Transform(translation=np.array([0, 0, 0.01 + stand_height/2]))
+    )
+    
+    # Screen
+    screen = Box(
+        dimensions=screen_dims,
+        transform=Transform(translation=np.array([0, 0, 0.01 + stand_height + screen_dims[2]/2]))
+    )
+    
+    return CompositeObject(primitives=[base, pole, screen], name="monitor")
+
+
+def create_barbell(
+    handle_len: float = 0.12,
+    handle_rad: float = 0.01,
+    weight_rad: float = 0.04,
+    weight_width: float = 0.02
+) -> CompositeObject:
+    """Create a barbell with cylindrical weights."""
+    # Handle
+    handle = Cylinder(
+        radius=handle_rad,
+        height=handle_len,
+        transform=Transform.from_euler(
+            translation=np.array([0, 0, weight_rad]),
+            euler_xyz=np.array([0, np.pi/2, 0]) # Horizontal
+        )
+    )
+    
+    # Weights (Cylinders rotated 90 deg to align with handle? No, same axis as handle)
+    # Cylinder default axis is Z. We want handle along X.
+    # Weights also along X.
+    
+    w1 = Cylinder(
+        radius=weight_rad,
+        height=weight_width,
+        transform=Transform.from_euler(
+            translation=np.array([-handle_len/2, 0, weight_rad]),
+            euler_xyz=np.array([0, np.pi/2, 0])
+        )
+    )
+    
+    w2 = Cylinder(
+        radius=weight_rad,
+        height=weight_width,
+        transform=Transform.from_euler(
+            translation=np.array([handle_len/2, 0, weight_rad]),
+            euler_xyz=np.array([0, np.pi/2, 0])
+        )
+    )
+    
+    return CompositeObject(primitives=[handle, w1, w2], name="barbell")
+
+
+def create_snowman(
+    r1: float = 0.04,
+    r2: float = 0.03,
+    r3: float = 0.02
+) -> CompositeObject:
+    """Create a stack of 3 spheres."""
+    z = 0
+    
+    s1 = Sphere(radius=r1, transform=Transform(translation=np.array([0, 0, z + r1])))
+    z += 2*r1 * 0.9 # Little overlap
+    
+    s2 = Sphere(radius=r2, transform=Transform(translation=np.array([0, 0, z + r2])))
+    z += 2*r2 * 0.9
+    
+    s3 = Sphere(radius=r3, transform=Transform(translation=np.array([0, 0, z + r3])))
+    
+    return CompositeObject(primitives=[s1, s2, s3], name="snowman")
+
+
+def create_camera(
+    body_dims: np.ndarray = None,
+    lens_radius: float = 0.025
+) -> CompositeObject:
+    """Create a camera shape."""
+    if body_dims is None: body_dims = np.array([0.10, 0.04, 0.06])
+    
+    # Body
+    body = Box(
+        dimensions=body_dims,
+        transform=Transform(translation=np.array([0, 0, body_dims[2]/2]))
+    )
+    
+    # Lens (cylinder sticking out of front Y face)
+    # Body Y range: -0.02 to 0.02
+    lens_len = 0.03
+    lens = Cylinder(
+        radius=lens_radius,
+        height=lens_len,
+        transform=Transform.from_euler(
+            translation=np.array([0, body_dims[1]/2 + lens_len/2 - 0.005, body_dims[2]/2]), # Offset Y
+            euler_xyz=np.array([np.pi/2, 0, 0]) # Rotate to point Y
+        )
+    )
+    
+    return CompositeObject(primitives=[body, lens], name="camera")
+
+
+def create_frying_pan(
+    pan_radius: float = 0.06,
+    pan_height: float = 0.02,
+    handle_len: float = 0.10
+) -> CompositeObject:
+    """Create a frying pan."""
+    # Pan (Cylinder)
+    pan = Cylinder(
+        radius=pan_radius,
+        height=pan_height,
+        transform=Transform(translation=np.array([0, 0, pan_height/2]))
+    )
+    
+    # Handle
+    handle = Cylinder(
+        radius=0.008,
+        height=handle_len,
+        transform=Transform.from_euler(
+            translation=np.array([pan_radius + handle_len/2 - 0.005, 0, pan_height/2]),
+            euler_xyz=np.array([0, np.pi/2, 0])
+        )
+    )
+    
+    return CompositeObject(primitives=[pan, handle], name="frying_pan")
+
+
+def create_flashlight(
+    head_rad: float = 0.025,
+    handle_rad: float = 0.012,
+    total_len: float = 0.15
+) -> CompositeObject:
+    """Create a flashlight."""
+    head_len = 0.04
+    handle_len = total_len - head_len
+    
+    # Laying flat along X
+    
+    # Handle
+    handle = Cylinder(
+        radius=handle_rad,
+        height=handle_len,
+        transform=Transform.from_euler(
+            translation=np.array([handle_len/2, 0, head_rad]), # Z=head_rad to lie flat? Or just radius
+            euler_xyz=np.array([0, np.pi/2, 0])
+        )
+    )
+    
+    # Head
+    head = Cylinder(
+        radius=head_rad,
+        height=head_len,
+        transform=Transform.from_euler(
+            translation=np.array([handle_len + head_len/2, 0, head_rad]),
+            euler_xyz=np.array([0, np.pi/2, 0])
+        )
+    )
+    
+    return CompositeObject(primitives=[handle, head], name="flashlight")
+
+
+def create_spatula(
+    handle_len: float = 0.12,
+    blade_dims: np.ndarray = None
+) -> CompositeObject:
+    """Create a spatula."""
+    if blade_dims is None: blade_dims = np.array([0.06, 0.08, 0.005])
+    
+    # Handle
+    handle = Cylinder(
+        radius=0.008,
+        height=handle_len,
+        transform=Transform.from_euler(
+            translation=np.array([0, -handle_len/2, 0.01]),
+            euler_xyz=np.array([np.pi/2, 0, 0]) # Along Y
+        )
+    )
+    
+    # Blade
+    blade = Box(
+        dimensions=blade_dims,
+        transform=Transform(translation=np.array([0, blade_dims[1]/2, 0.005]))
+    )
+    
+    return CompositeObject(primitives=[handle, blade], name="spatula")
+
+
+def create_remote(
+    dims: np.ndarray = None
+) -> CompositeObject:
+    """Create a remote control (box with buttons?). Just a detailed box for now."""
+    if dims is None: dims = np.array([0.05, 0.15, 0.015])
+    
+    body = Box(
+        dimensions=dims,
+        transform=Transform(translation=np.array([0, 0, dims[2]/2]))
+    )
+    
+    # Add a "button" row (small box on top)
+    btn = Box(
+        dimensions=np.array([0.04, 0.04, 0.005]),
+        transform=Transform(translation=np.array([0, dims[1]/3, dims[2] + 0.0025]))
+    )
+    
+    return CompositeObject(primitives=[body, btn], name="remote")
+
+
+def create_joystick(
+    base_dims: np.ndarray = None,
+    stick_height: float = 0.06
+) -> CompositeObject:
+    """Create a joystick arcade controller."""
+    if base_dims is None: base_dims = np.array([0.10, 0.08, 0.04])
+    
+    # Base
+    base = Box(
+        dimensions=base_dims,
+        transform=Transform(translation=np.array([0, 0, base_dims[2]/2]))
+    )
+    
+    # Stick
+    stick = Cylinder(
+        radius=0.008,
+        height=stick_height,
+        transform=Transform(translation=np.array([0, 0, base_dims[2] + stick_height/2]))
+    )
+    
+    # Ball top
+    ball = Sphere(
+        radius=0.02,
+        transform=Transform(translation=np.array([0, 0, base_dims[2] + stick_height + 0.015]))
+    )
+    
+    return CompositeObject(primitives=[base, stick, ball], name="joystick")
+
+def create_bottle(
+    body_radius: float = 0.03,
+    body_height: float = 0.08,
+    neck_radius: float = 0.01,
+    neck_height: float = 0.03
+) -> CompositeObject:
+    """Create a bottle shape (cylinder body + cylinder neck)."""
+    # Main body
+    body = Cylinder(
+        radius=body_radius,
+        height=body_height,
+        transform=Transform(translation=np.array([0, 0, body_height/2]))
+    )
+    
+    # Neck
+    neck = Cylinder(
+        radius=neck_radius,
+        height=neck_height,
+        transform=Transform(translation=np.array([0, 0, body_height + neck_height/2]))
+    )
+    
+    return CompositeObject(primitives=[body, neck], name="bottle")
+
