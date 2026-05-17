@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reproduce &mdash; Generative 3D Object Modeling for ROS 2</title>
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+  <style>
+    .step-card {
+      background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+      padding: 1.2rem 1.4rem; margin-bottom: 1rem;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+    }
+    .step-num {
+      display: inline-block; background: #2196F3; color: white;
+      width: 1.8rem; height: 1.8rem; border-radius: 50%;
+      text-align: center; line-height: 1.8rem; font-weight: 700;
+      margin-right: 0.6rem;
+    }
+    pre code { font-size: 0.85rem; }
+    .note {
+      background: #f5f7ff; border-left: 4px solid #2196F3;
+      padding: 0.8rem 1.2rem; margin: 0.8rem 0; border-radius: 0 8px 8px 0;
+    }
+    .warn {
+      background: #fff5f5; border-left: 4px solid #E53E3E;
+      padding: 0.8rem 1.2rem; margin: 0.8rem 0; border-radius: 0 8px 8px 0;
+    }
+  </style>
+</head>
+<body>
+
+<nav class="navbar"><div class="navbar-brand"></div>
+<div class="navbar-menu"><div class="navbar-start" style="flex-grow:1; justify-content:center;">
+  <a class="navbar-item" href="index.html"><span class="icon"><i class="fas fa-home"></i></span><span>Home</span></a>
+  <a class="navbar-item" href="REPRODUCE.html"><span class="icon"><i class="fas fa-flask"></i></span><span>Reproduce</span></a>
+  <a class="navbar-item" href="DEMO.html"><span class="icon"><i class="fas fa-play"></i></span><span>Demo</span></a>
+  <a class="navbar-item" href="paper.pdf"><span class="icon"><i class="fas fa-file-pdf"></i></span><span>Paper</span></a>
+  <a class="navbar-item" href="https://github.com/xya22er/3d_generator"><span class="icon"><i class="fab fa-github"></i></span><span>Code</span></a>
+</div></div></nav>
+
+<section class="hero">
+  <div class="hero-body">
+    <div class="container is-max-desktop">
+      <h1 class="title is-2">Reproducing the numbers</h1>
+      <p class="subtitle is-5">End-to-end, in under thirty minutes on a single CPU. Three independent stages each produce part of Table II.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+
+    <h2 class="title is-3">Prerequisites</h2>
+    <div class="step-card">
+      <ul>
+        <li>Ubuntu 24.04 (Noble) with <strong>ROS&nbsp;2 Jazzy</strong> installed. The Debian binaries from <code>packages.ros.org</code> work.</li>
+        <li>The following <code>ros-jazzy-*</code> packages:
+          <code>moveit</code>,
+          <code>moveit-py</code>,
+          <code>moveit-resources-panda-description</code>,
+          <code>moveit-resources-panda-moveit-config</code>,
+          <code>ros-gz-sim</code>,
+          <code>robot-state-publisher</code>,
+          <code>tf2-ros</code>.
+        </li>
+        <li>Python&nbsp;3.12 with <code>numpy</code>, <code>scipy</code>, <code>trimesh</code>, <code>pyyaml</code>, <code>matplotlib</code>, and <code>cma</code> (for the CMA-ES baseline). Install with <code>pip install --user trimesh pyyaml cma matplotlib</code>.</li>
+        <li>About 1&nbsp;GB of free disk for the per-seed manifest dirs.</li>
+      </ul>
+<pre><code>sudo apt install -y \
+    ros-jazzy-moveit ros-jazzy-moveit-py \
+    ros-jazzy-moveit-resources-panda-description \
+    ros-jazzy-moveit-resources-panda-moveit-config \
+    ros-jazzy-ros-gz-sim ros-jazzy-robot-state-publisher \
+    ros-jazzy-tf2-ros latexdiff
+pip install --user --break-system-packages trimesh pyyaml cma matplotlib</code></pre>
+    </div>
+
+    <h2 class="title is-3">Clone</h2>
+    <div class="step-card">
+<pre><code>git clone https://github.com/xya22er/3d_generator.git
+cd 3d_generator</code></pre>
+      <p>Everything below assumes the working directory is the repository root.</p>
+    </div>
+
+    <h2 class="title is-3">Build the ROS 2 workspace</h2>
+    <div class="step-card">
+<pre><code>cd ros2_ws
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select generated_objects_eval
+source install/setup.bash
+cd ..</code></pre>
+      <div class="note">
+        <strong>Tip.</strong> Future shells need both <code>source /opt/ros/jazzy/setup.bash</code> and
+        <code>source ros2_ws/install/setup.bash</code> in that order.
+      </div>
+    </div>
+
+    <h2 class="title is-3">Three stages</h2>
+
+    <div class="step-card">
+      <h3 class="title is-5"><span class="step-num">1</span> Build the per-method manifest of objects + grasps</h3>
+      <p>
+        For each method (CEM, CMA-ES, GA, random search, fixed CAD), this trains under a 1500-evaluation
+        budget, exports the top-25 objects to URDF + SDF + meshes under
+        <code>output/seed_42/manifest_objects/</code>, and synthesises grasp candidates for each.
+        The SDF collision geometry is then rewritten to the visual mesh's AABB (DART can't ingest
+        normal-less OBJs).
+      </p>
+<pre><code>python3 scripts/build_eval_manifest.py \
+    --budget 1500 --top-k 25 --seed 42 \
+    --out output/seed_42/eval_manifest.json
+python3 scripts/patch_sdf_collision.py \
+    --manifest output/seed_42/eval_manifest.json</code></pre>
+      <p>Repeat with <code>--seed 43</code> and <code>--seed 44</code> for the multi-seed table.</p>
+    </div>
+
+    <div class="step-card">
+      <h3 class="title is-5"><span class="step-num">2</span> Python-level evaluation</h3>
+      <p>
+        Produces the suitability score, force-closure grasp success rate, feature diversity, and
+        Chamfer diversity per method. Output goes to a single JSON consumed by the aggregation
+        step.
+      </p>
+<pre><code>python3 scripts/run_unified_eval.py \
+    --budget 1500 --top-k 100 --seed 42 \
+    --out output/seed_42/unified_eval.json</code></pre>
+    </div>
+
+    <div class="step-card">
+      <h3 class="title is-5"><span class="step-num">3a</span> MoveIt 2 motion-planning evaluation</h3>
+      <p>
+        Brings up <code>robot_state_publisher</code>, <code>home_joint_state_publisher</code>, a static
+        <code>world &rarr; panda_link0</code> TF, and the <code>moveit_planning_eval</code> node. The
+        node loads each grasp's pre-grasp pose and asks RRTConnect for a joint-space plan from the
+        Panda's SRDF <code>ready</code> configuration.
+      </p>
+<pre><code>cd ros2_ws &amp;&amp; source install/setup.bash &amp;&amp; cd ..
+ros2 launch generated_objects_eval moveit_planning_eval.launch.py \
+    manifest:=$(pwd)/output/seed_42/eval_manifest.json \
+    out:=$(pwd)/output/seed_42/moveit_results.json \
+    max_objects:=0</code></pre>
+      <div class="warn">
+        <strong>Heads-up.</strong> The <code>moveit_py</code> 2.12.x shutdown segfaults <em>after</em>
+        the JSON is written. The <code>scripts/run_multi_seed.sh</code> wrapper polls for the JSON
+        and kills the launch immediately so the next stage can start; if you invoke the launch by
+        hand, watch for <code>"Wrote 125 results to ..."</code> and Ctrl-C.
+      </div>
+    </div>
+
+    <div class="step-card">
+      <h3 class="title is-5"><span class="step-num">3b</span> Gazebo dynamic-stability evaluation</h3>
+      <p>
+        Boots <code>gz_sim</code> headless with the bundled <code>panda_eval_world</code> (ground + table)
+        and spawns each generated object on the table for a 2.5&nbsp;s settle. An object is stable iff
+        tilt &lt;&nbsp;25&deg; and drift &lt;&nbsp;5&nbsp;cm.
+      </p>
+<pre><code># In one terminal:
+ros2 launch generated_objects_eval stability_world.launch.py
+
+# In another terminal:
+cd ros2_ws &amp;&amp; source install/setup.bash &amp;&amp; cd ..
+ros2 run generated_objects_eval gazebo_stability_eval \
+    --manifest $(pwd)/output/seed_42/eval_manifest.json \
+    --out $(pwd)/output/seed_42/gazebo_stability.json</code></pre>
+    </div>
+
+    <h2 class="title is-3">All seeds in one go</h2>
+    <div class="step-card">
+      <p>
+        <code>scripts/run_multi_seed.sh</code> chains stages 1&ndash;3 across multiple seeds, killing
+        stale <code>gz_sim</code> instances before every seed (the <code>gz</code> transport routes
+        service calls non-deterministically across same-world instances otherwise):
+      </p>
+<pre><code>bash scripts/run_multi_seed.sh 42 43 44</code></pre>
+      <p>
+        About 20&nbsp;minutes per seed on a recent laptop CPU. Logs land in
+        <code>output/seed_&lt;N&gt;/{moveit,gazebo,gz_world}.log</code>.
+      </p>
+    </div>
+
+    <h2 class="title is-3">Aggregate</h2>
+    <div class="step-card">
+<pre><code>python3 scripts/aggregate_seeds.py 42 43 44 \
+    --out output/aggregated.json
+cp output/aggregated.json docs/data/results.json   # refresh the project page</code></pre>
+      <p>
+        The aggregator prints a markdown table identical to Table&nbsp;II in the paper and writes a
+        JSON consumed by the results table on this site.
+      </p>
+    </div>
+
+    <h2 class="title is-3">Rebuild the paper</h2>
+    <div class="step-card">
+<pre><code>cd papers/conferences/ICARM/_IEEE_ARM__*
+pdflatex new.tex
+bibtex new
+pdflatex new.tex &amp;&amp; pdflatex new.tex
+
+# Track-changes against the original submission:
+latexdiff old.tex new.tex &gt; diff.tex
+pdflatex diff.tex &amp;&amp; pdflatex diff.tex
+
+# Revisions-only PDF (deletions hidden):
+python3 ../../../../scripts/make_clean_diff.py diff.tex diff_clean.tex
+pdflatex diff_clean.tex &amp;&amp; pdflatex diff_clean.tex</code></pre>
+    </div>
+
+    <h2 class="title is-3">Verify your numbers</h2>
+    <div class="step-card">
+      <p>
+        Reproduction tolerance is &plusmn;3% on every cell of Table&nbsp;II across seeds 42/43/44.
+        If a number drifts by more than that, the most likely cause is one of:
+      </p>
+      <ul>
+        <li><strong>Stale <code>gz sim</code> instances</strong> from a previous run stealing
+        <code>/world/.../create</code> service calls. Run <code>pkill -KILL -f "gz sim"</code> and
+        re-launch.</li>
+        <li><strong><code>CheckStartStateCollision</code> failures</strong> in the MoveIt log: the
+        Panda is being evaluated at all-zero joints (which puts it in self-collision). The launch
+        uses <code>home_joint_state_publisher</code> + SRDF <code>set_start_state("ready")</code>
+        to avoid this; if those got bypassed (e.g. you replaced the launch file), restore them.</li>
+        <li><strong>Mesh normals missing</strong> in the exported collision OBJ. Run
+        <code>patch_sdf_collision.py</code> to rewrite collisions as AABB primitives.</li>
+      </ul>
+    </div>
+
+  </div>
+</section>
+
+<footer class="footer"><div class="container"><div class="content has-text-centered">
+  <p>RIOTU Lab, Prince Sultan University &mdash; Riyadh, Saudi Arabia</p>
+</div></div></footer>
+
+</body>
+</html>

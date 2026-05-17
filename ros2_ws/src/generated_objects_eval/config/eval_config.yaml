@@ -1,0 +1,27 @@
+# Configuration for downstream evaluation runs.
+
+# Pose at which each generated object is placed on the (virtual) table.
+object_spawn:
+  x: 0.5      # m, in front of Panda base
+  y: 0.0
+  z: 0.4      # table height (Panda base is on a 0.4 m table)
+
+# Motion-planning evaluation parameters.
+planning:
+  planning_group: panda_arm
+  planner_id: RRTConnectkConfigDefault
+  num_planning_attempts: 5
+  planning_time_s: 2.0
+  goal_position_tolerance: 0.01
+  goal_orientation_tolerance: 0.05
+  # Generate this many candidate approach poses per object.
+  n_approach_poses: 8
+  # Allowed approach axes; each candidate uses a different start-of-pose offset.
+  approach_offset_m: 0.10
+  pre_grasp_offset_m: 0.05
+
+# Gazebo dynamic-stability test.
+stability:
+  settle_time_s: 2.0
+  upright_tolerance_deg: 25.0
+  drift_tolerance_m: 0.05

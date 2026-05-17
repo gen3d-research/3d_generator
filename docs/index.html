@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="description"
+    content="Generative 3D Object Modeling for Robust Robot Manipulation in ROS 2. A dataset-free, CPU-only generator of manipulation-ready 3D objects, evaluated end-to-end with MoveIt 2 and Gazebo on a Franka Panda.">
+  <meta name="keywords" content="ROS 2, MoveIt 2, Gazebo, Manipulation, 3D Generation, Cross-Entropy, Franka Panda">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Generative 3D Object Modeling for Robust Robot Manipulation in ROS 2</title>
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="Generative 3D Object Modeling for Robust Robot Manipulation in ROS 2">
+  <meta property="og:description"
+    content="ICARM 2026. Dataset-free, CPU-only generator of manipulation-ready 3D objects; 97.7% force-closure grasp, 100% MoveIt 2 plan, 98.7% Gazebo stability over three seeds.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="./static/images/system_pipeline.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Generative 3D Object Modeling for Robust Robot Manipulation in ROS 2">
+  <meta name="twitter:description"
+    content="ICARM 2026. Dataset-free, CPU-only generator of manipulation-ready 3D objects.">
+  <meta name="twitter:image" content="./static/images/system_pipeline.png">
+
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
+
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-slider.min.css">
+  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="./static/js/fontawesome.all.min.js"></script>
+  <script src="./static/js/bulma-carousel.min.js"></script>
+  <script src="./static/js/bulma-slider.min.js"></script>
+
+  <style>
+    .stat-card {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: 12px;
+      padding: 1.5rem;
+      color: white;
+      text-align: center;
+      margin: 0.5rem;
+    }
+    .stat-card .stat-number { font-size: 2.4rem; font-weight: 700; }
+    .stat-card .stat-label { font-size: 0.95rem; opacity: 0.9; }
+    .stat-card.blue   { background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%); }
+    .stat-card.green  { background: linear-gradient(135deg, #4CAF50 0%, #388E3C 100%); }
+    .stat-card.orange { background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%); }
+    .stat-card.teal   { background: linear-gradient(135deg, #009688 0%, #00796B 100%); }
+    .stat-card.pink   { background: linear-gradient(135deg, #E91E63 0%, #C2185B 100%); }
+    .stat-card.grey   { background: linear-gradient(135deg, #607D8B 0%, #455A64 100%); }
+
+    .figure-container { margin: 1.5rem 0; text-align: center; }
+    .figure-container img {
+      max-width: 100%; border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+    }
+    .figure-caption { font-size: 0.9rem; color: #666; margin-top: 0.5rem; font-style: italic; }
+
+    .rq-box {
+      background: #f5f7ff; border-left: 4px solid #2196F3;
+      padding: 1rem 1.5rem; margin: 0.75rem 0; border-radius: 0 8px 8px 0;
+    }
+    .rq-box strong { color: #1976D2; }
+
+    .pillar-tag {
+      display: inline-block; padding: 0.3rem 0.8rem; border-radius: 20px;
+      font-size: 0.85rem; font-weight: 600; margin: 0.25rem; color: white;
+    }
+
+    .video-card {
+      background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+      overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    }
+    .video-card video { width: 100%; display: block; background: #000; aspect-ratio: 16/9; }
+    .video-card .video-caption { padding: 0.65rem 0.9rem; font-size: 0.9rem; color: #444; }
+    .video-card .video-caption strong { color: #1f3a8a; }
+
+    .results-table th { background: #eef2ff; color: #1f3a8a; }
+    .results-table td.best { font-weight: 700; color: #1f3a8a; }
+  </style>
+</head>
+
+<body>
+
+  <nav class="navbar" role="navigation" aria-label="main navigation">
+    <div class="navbar-brand">
+      <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false">
+        <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
+      </a>
+    </div>
+    <div class="navbar-menu">
+      <div class="navbar-start" style="flex-grow: 1; justify-content: center;">
+        <a class="navbar-item" href="#abstract"><span class="icon"><i class="fas fa-book-open"></i></span><span>Abstract</span></a>
+        <a class="navbar-item" href="#method"><span class="icon"><i class="fas fa-cogs"></i></span><span>Method</span></a>
+        <a class="navbar-item" href="#videos"><span class="icon"><i class="fas fa-video"></i></span><span>Videos</span></a>
+        <a class="navbar-item" href="#results"><span class="icon"><i class="fas fa-chart-bar"></i></span><span>Results</span></a>
+        <a class="navbar-item" href="#reproduce"><span class="icon"><i class="fas fa-flask"></i></span><span>Reproduce</span></a>
+        <a class="navbar-item" href="#bibtex"><span class="icon"><i class="fas fa-quote-right"></i></span><span>BibTeX</span></a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-body">
+      <div class="container is-max-desktop">
+        <div class="columns is-centered">
+          <div class="column has-text-centered">
+            <h1 class="title is-1 publication-title">Generative 3D Object Modeling<br>for Robust Robot Manipulation in ROS&nbsp;2</h1>
+            <div class="is-size-5 publication-authors">
+              <span class="author-block">Abdulrahman S. Al-Batati<sup>1</sup>,</span>
+              <span class="author-block">Yasser Alhabashi<sup>1</sup>,</span>
+              <span class="author-block">Khaled Gabr<sup>1</sup>,</span>
+              <span class="author-block">Serry Sibaee<sup>1</sup>,</span>
+              <span class="author-block">Mohamed Abdelkader<sup>1</sup>,</span>
+              <span class="author-block">Wadii Boulila<sup>1</sup></span>
+            </div>
+            <div class="is-size-6 publication-authors" style="margin-top:0.25rem;">
+              <span class="author-block"><sup>1</sup>Robotics and Internet-of-Things Lab, Prince Sultan University, Riyadh</span>
+            </div>
+            <div class="is-size-6 publication-authors" style="margin-top:0.5rem;">
+              <span class="author-block"><strong>IEEE ARM 2026 / ICARM 2026</strong> &middot; Paris, France &middot; 21&ndash;23 July 2026</span>
+            </div>
+
+            <div class="column has-text-centered">
+              <div class="publication-links">
+                <span class="link-block">
+                  <a href="paper.pdf" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon"><i class="fas fa-file-pdf"></i></span>
+                    <span>Paper</span>
+                  </a>
+                </span>
+                <span class="link-block">
+                  <a href="diff_clean.pdf" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon"><i class="fas fa-pen-fancy"></i></span>
+                    <span>Revisions</span>
+                  </a>
+                </span>
+                <span class="link-block">
+                  <a href="https://github.com/xya22er/3d_generator" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon"><i class="fab fa-github"></i></span>
+                    <span>Code</span>
+                  </a>
+                </span>
+                <span class="link-block">
+                  <a href="REPRODUCE.html" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon"><i class="fas fa-flask"></i></span>
+                    <span>Reproduce</span>
+                  </a>
+                </span>
+                <span class="link-block">
+                  <a href="DEMO.html" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon"><i class="fas fa-play"></i></span>
+                    <span>Demo</span>
+                  </a>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Headline numbers -->
+  <section class="hero is-light is-small">
+    <div class="hero-body">
+      <div class="container is-max-desktop">
+        <div class="columns is-centered is-multiline">
+          <div class="column is-3">
+            <div class="stat-card blue"><div class="stat-number">97.7%</div><div class="stat-label">Force-closure grasp</div></div>
+          </div>
+          <div class="column is-3">
+            <div class="stat-card green"><div class="stat-number">100%</div><div class="stat-label">MoveIt 2 motion plan</div></div>
+          </div>
+          <div class="column is-3">
+            <div class="stat-card orange"><div class="stat-number">98.7%</div><div class="stat-label">Gazebo dynamic stability</div></div>
+          </div>
+          <div class="column is-3">
+            <div class="stat-card teal"><div class="stat-number">200k</div><div class="stat-label">Generated objects</div></div>
+          </div>
+          <div class="column is-3">
+            <div class="stat-card pink"><div class="stat-number">20</div><div class="stat-label">Archetypes</div></div>
+          </div>
+          <div class="column is-3">
+            <div class="stat-card grey"><div class="stat-number">5</div><div class="stat-label">Methods compared</div></div>
+          </div>
+          <div class="column is-3">
+            <div class="stat-card blue"><div class="stat-number">3</div><div class="stat-label">Independent metrics</div></div>
+          </div>
+          <div class="column is-3">
+            <div class="stat-card green"><div class="stat-number">CPU</div><div class="stat-label">No GPU / no dataset</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Abstract -->
+  <section class="section" id="abstract">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered has-text-centered">
+        <div class="column is-four-fifths">
+          <h2 class="title is-3">Abstract</h2>
+          <div class="content has-text-justified">
+            <p>
+              Simulation drives modern robotic manipulation research, yet the diversity of available
+              3D assets is usually limited to small, biased CAD collections that brittle motion
+              planners and learned policies overfit to. We present a dataset-free framework for
+              generative 3D object modeling targeted at manipulation in ROS&nbsp;2.
+            </p>
+            <p>
+              Each candidate object is expressed as a union of parametric primitives and scored on
+              size feasibility, static stability, a continuous graspability metric, and mesh
+              validity. A lightweight Cross-Entropy optimizer adapts the parameter distribution
+              toward high-scoring objects without any external dataset, and every accepted object is
+              exported with consistent inertial properties and friction-sampled surfaces, ready for
+              MoveIt&nbsp;2 and Gazebo.
+            </p>
+            <div class="rq-box">
+              <strong>RQ:</strong> Can a lightweight, constraint-driven generator produce diverse,
+              physically plausible objects that improve the downstream robustness of ROS&nbsp;2
+              manipulation planning compared to fixed CAD sets and naive procedural randomization?
+            </div>
+            <p style="margin-top:1rem;">
+              To break the circularity that arises when training and evaluation share an objective,
+              we report three <em>independent</em> downstream metrics on a Franka Panda: force-closure
+              grasp synthesis, MoveIt&nbsp;2 motion-planning success, and Gazebo dynamic stability.
+              Averaged over three seeds, our generator reaches 97.7%, 100%, and 98.7% respectively,
+              dominating CMA-ES, a genetic algorithm, random search, and a fixed CAD library on two of
+              the three metrics outright while preserving competitive shape diversity across 200,000
+              generated objects in 20 archetypes.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Method / four components -->
+  <section class="section" id="method" style="background:#f9fafb;">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3 has-text-centered">How it works</h2>
+      <div class="columns is-centered is-multiline" style="margin-top:1rem;">
+        <div class="column is-6">
+          <div class="box">
+            <h3 class="title is-5"><span class="pillar-tag" style="background:#2196F3;">1</span> Parametric primitives</h3>
+            <p>Each object is a union of one to four boxes, cylinders, spheres, or capsules with rigid
+            transforms. Mass, COM, and inertia have closed-form expressions, so every exported asset
+            ships with physically consistent inertial properties.</p>
+          </div>
+        </div>
+        <div class="column is-6">
+          <div class="box">
+            <h3 class="title is-5"><span class="pillar-tag" style="background:#4CAF50;">2</span> Constraint-based scoring</h3>
+            <p>Four components score <em>size</em> feasibility, <em>static stability</em>
+            (COM-to-support-polygon margin), a continuous <em>graspability</em> metric (soft antipodal
+            pairs within gripper width), and <em>mesh validity</em>.</p>
+          </div>
+        </div>
+        <div class="column is-6">
+          <div class="box">
+            <h3 class="title is-5"><span class="pillar-tag" style="background:#FF9800;">3</span> Cross-Entropy learner</h3>
+            <p>A factored Gaussian over primitive parameters (dimensions in log-space) is updated each
+            iteration to maximise the likelihood of the top-20% elite samples. Gradient-free,
+            dataset-free, CPU-only, converges in ~30 iterations.</p>
+          </div>
+        </div>
+        <div class="column is-6">
+          <div class="box">
+            <h3 class="title is-5"><span class="pillar-tag" style="background:#E91E63;">4</span> ROS&nbsp;2 deployment</h3>
+            <p>Each accepted object is exported as URDF + SDF + meshes + metadata with parallel-axis
+            inertia and Coulomb friction sampled from <em>𝒩</em>(0.8, 0.2). The companion
+            <code>generated_objects_eval</code> package consumes the manifest from MoveIt&nbsp;2 and
+            Gazebo nodes.</p>
+          </div>
+        </div>
+      </div>
+      <div class="columns is-centered">
+        <div class="column is-full">
+          <div class="figure-container">
+            <img src="./static/images/system_pipeline.png" alt="System pipeline">
+            <p class="figure-caption">Offline generation produces a manifest of URDF/SDF assets; the
+              <code>generated_objects_eval</code> ROS&nbsp;2 package consumes that manifest from
+              MoveIt&nbsp;2 and Gazebo nodes.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Videos -->
+  <section class="section" id="videos">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3 has-text-centered">Videos</h2>
+      <div class="columns is-centered is-multiline" style="margin-top:1rem;">
+        <div class="column is-6">
+          <div class="video-card">
+            <video src="videos/side_by_side.mp4" controls muted loop playsinline></video>
+            <div class="video-caption"><strong>Side-by-side.</strong> Gazebo physics (left) and RViz&nbsp;2 motion planning (right) on the same CEM-generated object.</div>
+          </div>
+        </div>
+        <div class="column is-6">
+          <div class="video-card">
+            <video src="videos/rviz_motion_plan.mp4" controls muted loop playsinline></video>
+            <div class="video-caption"><strong>Pick &amp; place.</strong> The Panda picks the generated object, lifts it, transports it 25&nbsp;cm laterally, and places it down &mdash; all stages animated in RViz&nbsp;2.</div>
+          </div>
+        </div>
+        <div class="column is-6">
+          <div class="video-card">
+            <video src="videos/gz_drop_settle.mp4" controls muted loop playsinline></video>
+            <div class="video-caption"><strong>Drop &amp; settle.</strong> Gazebo dynamic-stability test: CEM-generated objects falling onto the table from 5&nbsp;cm.</div>
+          </div>
+        </div>
+        <div class="column is-6">
+          <div class="video-card">
+            <video src="videos/archetype_tour.mp4" controls muted loop playsinline></video>
+            <div class="video-caption"><strong>Archetype tour.</strong> A sequence of objects sampled from CEM, Fixed&nbsp;CAD, and CMA-ES.</div>
+          </div>
+        </div>
+      </div>
+      <p class="has-text-centered" style="margin-top:0.5rem; color:#666; font-size:0.9rem;">
+        Recording instructions in <a href="DEMO.html">DEMO.html</a>.
+      </p>
+    </div>
+  </section>
+
+  <!-- Results -->
+  <section class="section" id="results" style="background:#f9fafb;">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3 has-text-centered">Results</h2>
+      <p class="has-text-centered" style="margin-bottom:1.5rem;">
+        Three independent downstream metrics, averaged over three seeds (42, 43, 44) on the top-25
+        objects per method. The suitability score is reported for completeness but saturates for every
+        method (mean&nbsp;&ge;&nbsp;0.98) &mdash; it is the objective CEM optimises and is therefore not a
+        fair discriminator.
+      </p>
+      <div class="columns is-centered">
+        <div class="column is-full">
+          <table class="table is-fullwidth is-hoverable results-table" id="results-table">
+            <thead>
+              <tr>
+                <th>Method</th>
+                <th>Force-closure grasp</th>
+                <th>MoveIt&nbsp;2 plan</th>
+                <th>Gazebo stable</th>
+                <th>Feature diversity</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="columns is-centered">
+        <div class="column is-half">
+          <div class="figure-container">
+            <img src="./static/images/generated_examples.png" alt="Generated examples">
+            <p class="figure-caption">Representative CEM-generated objects: hammer-like (cylinder + orthogonal box) and bottle-like (cylinder + sphere) compositions emerge purely from the four scoring components.</p>
+          </div>
+        </div>
+        <div class="column is-half">
+          <div class="figure-container">
+            <img src="./static/images/archetype_comparison_N10000.png" alt="Archetype scoring">
+            <p class="figure-caption">Suitability score distributions for 20 archetypes (N&nbsp;=&nbsp;10,000 each). V-shape and spatula are hardest; snowman and barbell easiest.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Key takeaways -->
+  <section class="section">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3 has-text-centered">Key takeaways</h2>
+      <div class="content has-text-justified">
+        <ul>
+          <li><strong>Optimising a suitability function is necessary but not sufficient.</strong> Every search algorithm we tried saturated the suitability score within a few iterations &mdash; CEM, CMA-ES, GA, random search, fixed CAD all reach mean&nbsp;&ge;&nbsp;0.98. The discriminating signal lives in <em>independent</em> downstream metrics computed by code paths disjoint from the training objective.</li>
+          <li><strong>CEM dominates two metrics, ties on the third.</strong> 97.7% force-closure grasp success (vs. 51&ndash;79% for non-CEM baselines), 100% MoveIt&nbsp;2 motion-planning success (vs. 63&ndash;89%), and 98.7% Gazebo stability (vs. 89&ndash;100%). CEM is the only method above 90% on every column simultaneously.</li>
+          <li><strong>Population searches over-optimise to stable monoliths.</strong> CMA-ES and GA converge on box-like shapes that drop and stay put trivially, but those same shapes admit fewer force-closure grasps and yield fewer reachable pre-grasp poses.</li>
+          <li><strong>Fixed CAD pays a stability variance penalty.</strong> Hand-designed semantic archetypes (frying pan, spatula, V-shape) tip when dropped, giving the largest dynamic-stability variance in the comparison (&plusmn;15.1%).</li>
+          <li><strong>Diversity is preserved, not collapsed.</strong> CEM's feature diversity (3.48&nbsp;&plusmn;&nbsp;0.24) tracks the Fixed&nbsp;CAD upper bound (4.01) closely while population searches compress into a narrow mode (&asymp;3.28).</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Reproduce -->
+  <section class="section" id="reproduce" style="background:#f9fafb;">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3 has-text-centered">Reproduce</h2>
+      <div class="content has-text-justified">
+        <p>
+          Three independent stages: a Python evaluation that produces the suitability/diversity/grasp
+          numbers, a MoveIt&nbsp;2 launch that produces the planning-success numbers, and a Gazebo
+          launch that produces the dynamic-stability numbers. Full step-by-step in
+          <a href="REPRODUCE.html">REPRODUCE.html</a>.
+        </p>
+<pre><code># 1. Generate a manifest of top-25 objects per method.
+python3 scripts/build_eval_manifest.py \
+    --budget 1500 --top-k 25 --seed 42 \
+    --out output/eval_manifest.json
+python3 scripts/patch_sdf_collision.py --manifest output/eval_manifest.json
+
+# 2. Python-level evaluation (suitability, force-closure grasp, diversity).
+python3 scripts/run_unified_eval.py \
+    --budget 1500 --top-k 100 --seed 42 \
+    --out output/unified_eval.json
+
+# 3. MoveIt 2 motion-planning success rate.
+cd ros2_ws &amp;&amp; colcon build --packages-select generated_objects_eval
+source install/setup.bash
+ros2 launch generated_objects_eval moveit_planning_eval.launch.py \
+    manifest:=../output/eval_manifest.json \
+    out:=../output/moveit_results.json
+
+# 4. Gazebo dynamic-stability rate.
+ros2 launch generated_objects_eval stability_world.launch.py &amp;
+sleep 5
+ros2 run generated_objects_eval gazebo_stability_eval \
+    --manifest ../output/eval_manifest.json \
+    --out ../output/gazebo_stability.json
+
+# 5. Aggregate across seeds.
+python3 scripts/aggregate_seeds.py 42 43 44 --out docs/data/results.json
+</code></pre>
+        <p>
+          The visual pick-and-place demo (used for the videos) is launched separately:
+        </p>
+<pre><code>ros2 launch generated_objects_eval visual_demo.launch.py \
+    manifest:=../output/eval_manifest.json method:=cem loop:=true
+</code></pre>
+        <p>
+          See <a href="DEMO.html">DEMO.html</a> for screen-recording options, the NVIDIA EGL workaround,
+          and the four scene scripts.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- BibTeX -->
+  <section class="section" id="bibtex">
+    <div class="container is-max-desktop content">
+      <h2 class="title is-3 has-text-centered">BibTeX</h2>
+      <pre><code>@inproceedings{albatati2026generative3d,
+  title     = {Generative 3D Object Modeling for Robust Robot Manipulation in ROS 2},
+  author    = {Al-Batati, Abdulrahman S. and Alhabashi, Yasser and Gabr, Khaled
+               and Sibaee, Serry and Abdelkader, Mohamed and Boulila, Wadii},
+  booktitle = {Proceedings of the 2026 International Conference on Advanced
+               Robotics and Mechatronics (ICARM)},
+  address   = {Paris, France},
+  year      = {2026},
+}</code></pre>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="content has-text-centered">
+        <a class="icon-link" href="paper.pdf"><i class="fas fa-file-pdf"></i></a>
+        <a class="icon-link" href="https://github.com/xya22er/3d_generator"><i class="fab fa-github"></i></a>
+        <a class="icon-link" href="REPRODUCE.html"><i class="fas fa-flask"></i></a>
+      </div>
+      <div class="columns is-centered">
+        <div class="column is-8">
+          <div class="content has-text-centered">
+            <p>RIOTU Lab, Prince Sultan University &mdash; Riyadh, Saudi Arabia</p>
+            <p style="font-size:0.85rem; color:#999;">
+              Website template adapted from
+              <a href="https://github.com/asmbatati/ros2_survey">ros2_survey</a> &mdash;
+              originally from <a href="https://github.com/nerfies/nerfies.github.io">Nerfies</a>,
+              CC BY-SA 4.0.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Results table loader -->
+  <script>
+  (async function () {
+    const METHODS = ["cem", "fixed_cad", "cmaes", "random_search", "ga"];
+    const LABEL = {
+      cem: "CEM (Ours)", fixed_cad: "Fixed CAD", cmaes: "CMA-ES",
+      random_search: "Random Search", ga: "Genetic Algorithm"
+    };
+    const COLS = [
+      { k: "grasp_success_rate", pct: true },
+      { k: "moveit_plan_any",    pct: true },
+      { k: "gazebo_stable",      pct: true },
+      { k: "feature_diversity",  pct: false },
+    ];
+    function fmt(c, m, s) {
+      if (m === undefined) return "&mdash;";
+      if (c.pct) {
+        const a = (m * 100).toFixed(1);
+        if (s > 1e-6) return `${a}% &plusmn; ${(s * 100).toFixed(1)}`;
+        return `${a}%`;
+      }
+      if (s > 1e-6) return `${m.toFixed(2)} &plusmn; ${s.toFixed(2)}`;
+      return m.toFixed(2);
+    }
+    try {
+      const res = await fetch("data/results.json", { cache: "no-store" });
+      const data = await res.json();
+      const summary = data.summary;
+      const tbody = document.querySelector("#results-table tbody");
+      // best per column
+      const best = {};
+      for (const c of COLS) {
+        let w = -Infinity, wm = null;
+        for (const m of METHODS) {
+          const v = summary[m]?.[c.k]?.mean;
+          if (v !== undefined && v > w) { w = v; wm = m; }
+        }
+        best[c.k] = wm;
+      }
+      for (const m of METHODS) {
+        if (!summary[m]) continue;
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.textContent = LABEL[m] || m;
+        tr.appendChild(td);
+        for (const c of COLS) {
+          const cell = document.createElement("td");
+          const e = summary[m][c.k] || {};
+          cell.innerHTML = fmt(c, e.mean, e.std);
+          if (best[c.k] === m) cell.classList.add("best");
+          tr.appendChild(cell);
+        }
+        tbody.appendChild(tr);
+      }
+    } catch (err) {
+      const tbody = document.querySelector("#results-table tbody");
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 5;
+      td.textContent = "Run scripts/aggregate_seeds.py to populate data/results.json.";
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+  })();
+  </script>
+
+</body>
+</html>

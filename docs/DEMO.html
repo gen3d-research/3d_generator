@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo &mdash; Generative 3D Object Modeling for ROS 2</title>
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+  <style>
+    .step-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 1.2rem 1.4rem; margin-bottom: 1rem; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
+    .step-num { display: inline-block; background: #2196F3; color: white; width: 1.8rem; height: 1.8rem; border-radius: 50%; text-align: center; line-height: 1.8rem; font-weight: 700; margin-right: 0.6rem; }
+    pre code { font-size: 0.85rem; }
+    .note { background: #f5f7ff; border-left: 4px solid #2196F3; padding: 0.8rem 1.2rem; margin: 0.8rem 0; border-radius: 0 8px 8px 0; }
+    .warn { background: #fff5f5; border-left: 4px solid #E53E3E; padding: 0.8rem 1.2rem; margin: 0.8rem 0; border-radius: 0 8px 8px 0; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar"><div class="navbar-brand"></div>
+<div class="navbar-menu"><div class="navbar-start" style="flex-grow:1; justify-content:center;">
+  <a class="navbar-item" href="index.html"><span class="icon"><i class="fas fa-home"></i></span><span>Home</span></a>
+  <a class="navbar-item" href="REPRODUCE.html"><span class="icon"><i class="fas fa-flask"></i></span><span>Reproduce</span></a>
+  <a class="navbar-item" href="DEMO.html"><span class="icon"><i class="fas fa-play"></i></span><span>Demo</span></a>
+  <a class="navbar-item" href="paper.pdf"><span class="icon"><i class="fas fa-file-pdf"></i></span><span>Paper</span></a>
+  <a class="navbar-item" href="https://github.com/xya22er/3d_generator"><span class="icon"><i class="fab fa-github"></i></span><span>Code</span></a>
+</div></div></nav>
+
+<section class="hero">
+  <div class="hero-body">
+    <div class="container is-max-desktop">
+      <h1 class="title is-2">Running the pick-and-place demo</h1>
+      <p class="subtitle is-5">Visualises the full pipeline on a Franka Panda in RViz&nbsp;2 and Gazebo, with the same generated object that was scored in Table&nbsp;II.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+
+    <h2 class="title is-3">What you will see</h2>
+    <div class="step-card">
+      <ul>
+        <li><strong>Gazebo (left half of screen).</strong> The generated object rests on a table in the
+          <code>panda_eval_world</code>. The Panda itself is not in Gazebo &mdash; only the object &mdash; so
+          the gz window shows the object physics. (Adding the Panda to Gazebo is on the roadmap.)</li>
+        <li><strong>RViz&nbsp;2 (right half of screen).</strong> The Panda's <code>RobotModel</code>
+          display animates through a full pick-and-place sequence:
+          <em>ready &rarr; pre-grasp &rarr; grasp &rarr; lift &rarr; transport &rarr; place &rarr;
+          retract &rarr; ready</em>. While the object is "grasped" a marker travels with the
+          gripper. Each stage's joint trajectory is computed by MoveIt&nbsp;2 (RRTConnect via OMPL).</li>
+      </ul>
+    </div>
+
+    <h2 class="title is-3">Prerequisites</h2>
+    <div class="step-card">
+      <p>Same as <a href="REPRODUCE.html">Reproduce</a>, plus a display server. Run the workspace
+      build first if you haven't already:</p>
+<pre><code>cd ros2_ws
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select generated_objects_eval
+source install/setup.bash
+cd ..</code></pre>
+      <p>You also need a generated manifest to drive the demo (see step&nbsp;1 of
+      <a href="REPRODUCE.html#stage1">Reproduce</a> if you haven't built one):</p>
+<pre><code>python3 scripts/build_eval_manifest.py \
+    --budget 1500 --top-k 25 --seed 42 \
+    --out output/seed_42/eval_manifest.json
+python3 scripts/patch_sdf_collision.py \
+    --manifest output/seed_42/eval_manifest.json</code></pre>
+    </div>
+
+    <h2 class="title is-3">Launch the demo</h2>
+    <div class="step-card">
+      <h3 class="title is-5"><span class="step-num">1</span> Side-by-side: gz_sim + RViz + MoveIt 2 pick-and-place loop</h3>
+<pre><code>ros2 launch generated_objects_eval visual_demo.launch.py \
+    manifest:=$(pwd)/output/seed_42/eval_manifest.json \
+    method:=cem loop:=true</code></pre>
+      <p>This brings up five processes:</p>
+      <ol>
+        <li><code>gz sim -r</code> on the <code>panda_eval_world</code> (windowed).</li>
+        <li><code>robot_state_publisher</code> with the Panda URDF.</li>
+        <li>A static <code>world &rarr; panda_link0</code> TF (the SRDF declares a virtual_joint; without
+        this transform, RViz can't place the Panda and you would see an empty viewport).</li>
+        <li><code>rviz2</code> with the bundled <code>demo.rviz</code> config (RobotModel + scene
+        markers + the grasped-object marker).</li>
+        <li><code>demo_plan_driver</code>: spawns the CEM object in Gazebo, plans the 8-stage
+        pick-and-place sequence, and replays each plan on <code>/joint_states</code> so the
+        <code>RobotModel</code> in RViz animates end-to-end.</li>
+      </ol>
+      <p>The driver loops indefinitely with <code>loop:=true</code>; stop with Ctrl-C.</p>
+    </div>
+
+    <h2 class="title is-3">Just Gazebo (drop &amp; settle)</h2>
+    <div class="step-card">
+<pre><code># Terminal A: world
+ros2 launch generated_objects_eval stability_world_gui.launch.py
+
+# Terminal B: run the stability eval with a small N (so you can record a clip)
+ros2 run generated_objects_eval gazebo_stability_eval \
+    --manifest $(pwd)/output/seed_42/eval_manifest.json \
+    --out /tmp/gz_video.json --max-objects 6</code></pre>
+      <p>The eval node spawns each object, lets physics settle for 2.5&nbsp;s, then despawns. Good
+      for a 30&nbsp;s clip of the drop+settle behaviour.</p>
+    </div>
+
+    <h2 class="title is-3">Archetype tour video</h2>
+    <div class="step-card">
+<pre><code># Boot Gazebo (windowed)
+ros2 launch generated_objects_eval stability_world_gui.launch.py
+
+# Spawn a sequence of 12 objects from 3 methods (4 each):
+python3 scripts/archetype_tour.py \
+    --manifest output/seed_42/eval_manifest.json \
+    --methods cem fixed_cad cmaes --per-method 4 --settle-s 3.0</code></pre>
+    </div>
+
+    <h2 class="title is-3">Recording the videos</h2>
+    <div class="step-card">
+      <h3 class="title is-5">Option A &mdash; <code>ffmpeg</code> + <code>x11grab</code></h3>
+<pre><code>WIN=$(xdotool search --name "Gazebo" | head -1)
+xdotool getwindowgeometry $WIN          # note position + size
+
+ffmpeg -f x11grab -framerate 30 -video_size 1280x720 -i :0.0+100,80 \
+       -c:v libx264 -pix_fmt yuv420p -crf 23 \
+       docs/videos/gz_drop_settle.mp4</code></pre>
+      <p>Stop with Ctrl-C. Repeat for the RViz window or capture the whole screen for the
+      side-by-side video.</p>
+
+      <h3 class="title is-5">Option B &mdash; OBS Studio</h3>
+      <p>Add one <em>Window Capture</em> source per pane (Gazebo, RViz), arrange into a side-by-side
+      scene, set the output to mp4, hit Start Recording, then run the launch file.</p>
+
+      <h3 class="title is-5">Option C &mdash; Gazebo's built-in recorder</h3>
+      <p>In the <code>gz sim</code> window: <em>Settings &rarr; Video Recording &rarr; Start</em>. Saves to
+      <code>~/.gz/sim/videos/</code>. Useful only for the Gazebo half; doesn't capture RViz.</p>
+
+      <p>Drop the resulting mp4 files into <code>docs/videos/</code> with the names
+      <code>side_by_side.mp4</code>, <code>rviz_motion_plan.mp4</code>,
+      <code>gz_drop_settle.mp4</code>, <code>archetype_tour.mp4</code>. The project-page
+      <a href="index.html">index</a> already wires those filenames into the four video cards.</p>
+    </div>
+
+    <h2 class="title is-3">Generate video poster frames</h2>
+    <div class="step-card">
+<pre><code>cd docs &amp;&amp; bash make_posters.sh</code></pre>
+      <p>Extracts the frame at t=1&nbsp;s from each mp4 into
+      <code>static/images/poster_*.png</code>.</p>
+    </div>
+
+    <h2 class="title is-3">Common gotchas</h2>
+    <div class="step-card">
+
+      <h3 class="title is-5">RViz starts but the Panda doesn't render</h3>
+      <ul>
+        <li>Confirm <code>/joint_states</code> is being published:
+        <code>ros2 topic echo /joint_states --once</code>.</li>
+        <li>Confirm the static <code>world &rarr; panda_link0</code> TF is up:
+        <code>ros2 topic echo /tf_static --once</code>.</li>
+        <li>If RViz <em>Fixed Frame</em> still complains, change it to <code>panda_link0</code> via
+        Displays &rarr; Global Options.</li>
+      </ul>
+
+      <h3 class="title is-5">NVIDIA <code>libEGL</code> warnings &mdash; <code>failed to create dri2 screen</code></h3>
+      <p>On hybrid-graphics laptops (NVIDIA Optimus / Prime), gz_sim picks the wrong renderer. Try
+      one of:</p>
+<pre><code># a) Force gz to render through the NVIDIA GPU
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
+ros2 launch generated_objects_eval visual_demo.launch.py manifest:=...
+
+# b) Or force gz to use the OGRE 1.x renderer (no Vulkan/EGL needed)
+ros2 launch generated_objects_eval visual_demo.launch.py manifest:=... \
+    --ros-args -p render_engine:=ogre
+
+# c) Or run gz with software rendering (slow but always works)
+LIBGL_ALWAYS_SOFTWARE=1 ros2 launch generated_objects_eval visual_demo.launch.py manifest:=...</code></pre>
+      <p>The bundled launch file uses OGRE2; if you don't have a working OGRE2 install, edit
+      <code>launch/visual_demo.launch.py</code> and remove the <code>--render-engine ogre2</code>
+      flag from the <code>gz sim</code> command.</p>
+
+      <h3 class="title is-5">"Missing virtual_joint" warning every second</h3>
+      <p>The Panda SRDF declares a virtual_joint linking <code>world</code> to
+      <code>panda_link0</code>; until the static TF is published, MoveIt's planning_scene_monitor
+      will log this warning. Our launch file starts <code>static_transform_publisher</code>
+      automatically; if you see the warning, that node failed to start (check
+      <code>~/.ros/log/*/static_transform_publisher*.log</code>).</p>
+
+      <h3 class="title is-5"><code>CheckStartStateCollision' failed</code> in the planning log</h3>
+      <p>The Panda is being evaluated at all-zero joints, which puts it in self-collision. The
+      <code>demo_plan_driver</code> uses <code>arm.set_start_state(configuration_name="ready")</code>
+      (the SRDF group state); if you see this error, an older binary is being executed &mdash;
+      rebuild with <code>colcon build --packages-select generated_objects_eval</code>.</p>
+
+      <h3 class="title is-5">Stale <code>gz sim</code> instances from a previous run</h3>
+      <p>gz transport advertises services by world name, so two server instances on
+      <code>panda_eval_world</code> route service calls non-deterministically. Kill them before each
+      run:</p>
+<pre><code>pkill -KILL -f "gz sim"
+pkill -KILL -f "gazebo_stability_eval"
+pkill -KILL -f "moveit_planning_eval"</code></pre>
+    </div>
+
+  </div>
+</section>
+
+<footer class="footer"><div class="container"><div class="content has-text-centered">
+  <p>RIOTU Lab, Prince Sultan University &mdash; Riyadh, Saudi Arabia</p>
+</div></div></footer>
+
+</body>
+</html>

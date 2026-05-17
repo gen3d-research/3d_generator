@@ -1,4 +1,37 @@
+# Generated artifacts
 output/
 images/
+3d_generator/output/
+
+# Python bytecode
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+
+# ROS 2 colcon outputs
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporary
+*.tmp
+*.swp
+*.swo

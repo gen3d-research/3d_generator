@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>generated_objects_eval</name>
+  <version>0.1.0</version>
+  <description>
+    Downstream evaluation of objects produced by the 3d_generator: MoveIt 2
+    motion-planning success rate, Gazebo dynamic-stability rate, and
+    pick-and-place success on a Franka Panda. Used to produce the independent
+    downstream metrics requested by ICARM 2026 reviewers (R1, R2-Q1/Q2/Q3, AE).
+  </description>
+  <maintainer email="aalbatati@psu.edu.sa">Abdulrahman S. Al-Batati</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>moveit_py</depend>
+  <depend>moveit_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>shape_msgs</depend>
+  <depend>tf_transformations</depend>
+  <depend>moveit_resources_panda_moveit_config</depend>
+  <depend>moveit_resources_panda_description</depend>
+  <depend>ros_gz_sim</depend>
+  <depend>ros_gz_bridge</depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

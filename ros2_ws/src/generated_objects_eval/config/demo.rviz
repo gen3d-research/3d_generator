@@ -1,0 +1,74 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Plane Cell Count: 10
+      Cell Size: 0.5
+      Color: 160; 160; 160
+      Enabled: true
+      Reference Frame: panda_link0
+    - Class: rviz_default_plugins/RobotModel
+      Name: Panda
+      Description Topic:
+        Value: /robot_description
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      TF Prefix: ""
+      Visual Enabled: true
+      Collision Enabled: false
+      Mass Properties:
+        Inertia: false
+        Mass: false
+      Update Interval: 0
+      Enabled: true
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+      Show Names: false
+      Show Axes: true
+      Show Arrows: false
+      Marker Scale: 0.2
+    - Class: rviz_default_plugins/Marker
+      Name: SceneMarkers
+      Topic:
+        Value: /demo_scene_markers
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Enabled: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: GraspedObject
+      Topic:
+        Value: /demo_grasped_object
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Enabled: true
+  Global Options:
+    Background Color: 245; 245; 245
+    Fixed Frame: panda_link0
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 1.8
+      Focal Point:
+        X: 0.4
+        Y: 0.0
+        Z: 0.4
+      Pitch: 0.45
+      Yaw: 0.78
+      Name: Orbit
+Window Geometry:
+  Height: 900
+  Width: 1500
+  Displays:
+    collapsed: false
