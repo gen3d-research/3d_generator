@@ -65,13 +65,16 @@ def _launch_setup(context):
     manifest = LaunchConfiguration("manifest").perform(context)
     method = LaunchConfiguration("method").perform(context)
     loop = LaunchConfiguration("loop").perform(context).lower() in ("1", "true", "yes")
+    render_engine = LaunchConfiguration("render_engine").perform(context)
+    headless = LaunchConfiguration("headless").perform(context).lower() in ("1", "true", "yes")
 
     params_file, moveit_config = _build_params_file()
 
-    gz = ExecuteProcess(
-        cmd=["gz", "sim", "-r", "--render-engine", "ogre2", str(world)],
-        output="screen",
-    )
+    gz_cmd = ["gz", "sim", "-r"]
+    if headless:
+        gz_cmd.append("-s")
+    gz_cmd += ["--render-engine", render_engine, str(world)]
+    gz = ExecuteProcess(cmd=gz_cmd, output="screen")
     rsp = Node(
         package="robot_state_publisher",
         executable="robot_state_publisher",
@@ -125,5 +128,12 @@ def generate_launch_description():
         DeclareLaunchArgument("loop", default_value="true",
                               description="Loop the plan driver indefinitely "
                                           "for screen-recording"),
+        DeclareLaunchArgument("render_engine", default_value="ogre2",
+                              description="gz_sim render engine: ogre2 (default) "
+                                          "or ogre (use ogre on NVIDIA hybrid-"
+                                          "graphics laptops where EGL fails)"),
+        DeclareLaunchArgument("headless", default_value="false",
+                              description="Run gz_sim server-only (no window); "
+                                          "useful when only RViz is being recorded"),
         OpaqueFunction(function=_launch_setup),
     ])

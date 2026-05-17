@@ -107,8 +107,11 @@ class DemoNode(Node):
 
     def _publish_current(self):
         with self._lock:
-            q = list(self._current_q)
+            q = list(self._current_q)[:7]  # 7 arm joints only
             g = self._current_grip
+        # Pad with zeros if for any reason fewer than 7 joints are stored.
+        while len(q) < 7:
+            q.append(0.0)
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = PANDA_JOINT_NAMES
@@ -116,37 +119,109 @@ class DemoNode(Node):
         self.joint_pub.publish(msg)
 
     def set_state(self, q, grip=None):
+        # Keep only the 7 arm joints in _current_q; the two finger joints
+        # are driven separately via _current_grip.  Without this, the
+        # current_state_monitor logs "number of joint names does not match
+        # number of positions" when animate() writes a 9-element vector.
         with self._lock:
-            self._current_q = list(q)
+            self._current_q = list(q)[:7]
             if grip is not None:
                 self._current_grip = grip
 
-    def animate(self, trajectory, time_scale: float = 1.0):
-        """Replay a moveit_py trajectory on /joint_states at its native time
-        scale (multiplied by ``time_scale``)."""
-        if trajectory is None:
-            return
-        try:
-            pts = trajectory.joint_trajectory.points
-            names = trajectory.joint_trajectory.joint_names
-        except Exception:
-            return
-        if not pts:
-            return
-        idx = [names.index(n) if n in names else None for n in PANDA_JOINT_NAMES]
-        t0 = time.time()
-        for p in pts:
-            t_target = (p.time_from_start.sec + p.time_from_start.nanosec * 1e-9) * time_scale
-            dt = t_target - (time.time() - t0)
-            if dt > 0:
-                time.sleep(dt)
-            q = []
-            for j in idx:
-                if j is None:
-                    q.append(0.0)
-                else:
-                    q.append(float(p.positions[j]))
-            self.set_state(q)
+    def _extract_waypoints(self, trajectory):
+        """Return (points, joint_names) from a moveit_py RobotTrajectory.
+        The wrapper's surface area changed across 2.12.x releases, so try
+        every documented path."""
+        accessors = [
+            lambda t: (t.joint_trajectory.points,
+                       t.joint_trajectory.joint_names),
+            lambda t: (t.get_robot_trajectory_msg().joint_trajectory.points,
+                       t.get_robot_trajectory_msg().joint_trajectory.joint_names),
+            lambda t: (t.robot_trajectory.joint_trajectory.points,
+                       t.robot_trajectory.joint_trajectory.joint_names),
+        ]
+        for acc in accessors:
+            try:
+                p, n = acc(trajectory)
+                if p:
+                    return list(p), list(n)
+            except Exception:
+                continue
+        return None, None
+
+    def animate(self, trajectory, goal_q=None, time_scale: float = 1.0,
+                min_stage_seconds: float = 2.5):
+        """Replay a moveit_py trajectory on /joint_states.  If the waypoints
+        can't be extracted from the wrapper (API drift), fall back to
+        interpolating linearly from the current pose to ``goal_q`` over
+        ``min_stage_seconds``.  Always blocks at least ``min_stage_seconds``
+        so each stage is visible on camera."""
+        t_stage_start = time.time()
+        pts, names = self._extract_waypoints(trajectory) if trajectory is not None else (None, None)
+
+        if pts:
+            self.get_logger().info(f"    animate: {len(pts)} waypoints")
+            if len(pts) < 30:
+                pts = self._densify(pts, target=40)
+            idx = [names.index(n) if n in names else None for n in PANDA_JOINT_NAMES]
+            t0 = time.time()
+            for p in pts:
+                t_target = (p.time_from_start.sec
+                            + p.time_from_start.nanosec * 1e-9) * time_scale
+                dt = t_target - (time.time() - t0)
+                if dt > 0:
+                    time.sleep(dt)
+                q = [(float(p.positions[j]) if j is not None else 0.0) for j in idx]
+                self.set_state(q)
+        elif goal_q is not None:
+            # Linear interpolation fallback.
+            self.get_logger().warn(
+                "    animate: no waypoints from wrapper, interpolating to goal"
+            )
+            start = list(self._current_q)
+            n_steps = 40
+            for k in range(1, n_steps + 1):
+                a = k / n_steps
+                q = [(1 - a) * s + a * g for s, g in zip(start, goal_q)]
+                self.set_state(q)
+                time.sleep(min_stage_seconds / n_steps)
+
+        elapsed = time.time() - t_stage_start
+        if elapsed < min_stage_seconds:
+            time.sleep(min_stage_seconds - elapsed)
+
+    def _densify(self, points, target=40):
+        """Linearly interpolate the existing waypoints so the motion is
+        visually smooth in RViz."""
+        if len(points) >= target or len(points) < 2:
+            return points
+        ts = [p.time_from_start.sec + p.time_from_start.nanosec * 1e-9 for p in points]
+        total = ts[-1] if ts[-1] > 0 else max(1.0, len(points) * 0.05)
+        out = []
+        for k in range(target):
+            t = total * k / (target - 1)
+            i = 0
+            while i + 1 < len(ts) and ts[i + 1] < t:
+                i += 1
+            t0, t1 = ts[i], ts[min(i + 1, len(ts) - 1)]
+            alpha = 0.0 if t1 <= t0 else (t - t0) / (t1 - t0)
+            p0 = points[i].positions
+            p1 = points[min(i + 1, len(points) - 1)].positions
+            pos = [(1 - alpha) * a + alpha * b for a, b in zip(p0, p1)]
+
+            class _Stamp:
+                pass
+            stamp = _Stamp()
+            stamp.sec = int(t)
+            stamp.nanosec = int((t - int(t)) * 1e9)
+
+            class _Wp:
+                pass
+            w = _Wp()
+            w.positions = pos
+            w.time_from_start = stamp
+            out.append(w)
+        return out
 
     def publish_scene(self, table_pose=(0.5, 0.0, 0.2), table_size=(0.8, 0.8, 0.4)):
         m = Marker()
@@ -263,14 +338,15 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset):
                                 attached_to_link="panda_link0",
                                 color=(0.10, 0.55, 0.20, 1.0))
         if xyz is None:
-            time.sleep(0.4)
+            # Gripper-only stage: hold pose for a beat so the open/close is visible.
+            time.sleep(1.0)
             continue
         traj = plan_to_pose(arm, pose_stamped(xyz, app))
         if traj is None:
             demo.get_logger().warn(f"     plan failed at {stage_name}")
-            time.sleep(0.5)
+            time.sleep(1.5)
             continue
-        demo.animate(traj, time_scale=1.2)
+        demo.animate(traj, time_scale=1.5, min_stage_seconds=2.5)
     # Return arm to ready.
     demo.set_state(PANDA_READY, demo.hand_open)
     time.sleep(0.8)
@@ -305,6 +381,21 @@ def main():
             print(f"[demo] spawned {entry['name']} in gz_sim", flush=True)
         else:
             print(f"[demo] WARN: spawn failed for {entry['name']}", flush=True)
+
+    print("", flush=True)
+    print("=" * 70, flush=True)
+    print(" WHERE TO LOOK", flush=True)
+    print("=" * 70, flush=True)
+    print(" * RViz window: the Franka Panda's animated pick-and-place loop.", flush=True)
+    print("                Wait ~3 s for the model to subscribe to /robot_description,", flush=True)
+    print("                then the arm will move through 8 stages per cycle.", flush=True)
+    print(" * gz_sim window: the generated object resting on the table.", flush=True)
+    print("                  (The Panda is NOT spawned in Gazebo --- only the object", flush=True)
+    print("                   is, so the gz physics scene shows the object alone.)", flush=True)
+    print(" * If RViz is blank, set Fixed Frame to panda_link0 (Displays panel) and", flush=True)
+    print("   verify /joint_states is publishing: 'ros2 topic hz /joint_states'.", flush=True)
+    print("=" * 70, flush=True)
+    print("", flush=True)
 
     rclpy.init()
     from moveit.planning import MoveItPy
