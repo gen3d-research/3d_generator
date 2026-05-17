@@ -1,0 +1,82 @@
+<!-- ros2_control + gz_ros2_control fragment for the Panda.
+
+     Concatenated onto panda_base.urdf before </robot> by the launch
+     file's URDF-building helper.  Two pieces:
+       1. <ros2_control name="GazeboSystem" type="system"> block exposing
+          7 arm joints + 1 finger joint (the other finger mimics).
+       2. <gazebo><plugin> block loading the gz_ros2_control plugin and
+          pointing it at the package's ros2_controllers.yaml.
+-->
+
+<ros2_control name="GazeboSystem" type="system">
+  <hardware>
+    <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+  </hardware>
+
+  <joint name="panda_joint1">
+    <command_interface name="position"/>
+    <state_interface name="position">
+      <param name="initial_value">0.0</param>
+    </state_interface>
+    <state_interface name="velocity"/>
+  </joint>
+  <joint name="panda_joint2">
+    <command_interface name="position"/>
+    <state_interface name="position">
+      <param name="initial_value">-0.785</param>
+    </state_interface>
+    <state_interface name="velocity"/>
+  </joint>
+  <joint name="panda_joint3">
+    <command_interface name="position"/>
+    <state_interface name="position">
+      <param name="initial_value">0.0</param>
+    </state_interface>
+    <state_interface name="velocity"/>
+  </joint>
+  <joint name="panda_joint4">
+    <command_interface name="position"/>
+    <state_interface name="position">
+      <param name="initial_value">-2.356</param>
+    </state_interface>
+    <state_interface name="velocity"/>
+  </joint>
+  <joint name="panda_joint5">
+    <command_interface name="position"/>
+    <state_interface name="position">
+      <param name="initial_value">0.0</param>
+    </state_interface>
+    <state_interface name="velocity"/>
+  </joint>
+  <joint name="panda_joint6">
+    <command_interface name="position"/>
+    <state_interface name="position">
+      <param name="initial_value">1.571</param>
+    </state_interface>
+    <state_interface name="velocity"/>
+  </joint>
+  <joint name="panda_joint7">
+    <command_interface name="position"/>
+    <state_interface name="position">
+      <param name="initial_value">0.785</param>
+    </state_interface>
+    <state_interface name="velocity"/>
+  </joint>
+
+  <joint name="panda_finger_joint1">
+    <command_interface name="position"/>
+    <state_interface name="position">
+      <param name="initial_value">0.035</param>
+    </state_interface>
+    <state_interface name="velocity"/>
+  </joint>
+  <!-- panda_finger_joint2 mimics panda_finger_joint1 (declared in the URDF),
+       so it does not need its own state/command interfaces. -->
+</ros2_control>
+
+<gazebo>
+  <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+    <parameters>$(GENERATED_OBJECTS_EVAL_CONFIG)/ros2_controllers.yaml</parameters>
+    <controller_manager_node_name>controller_manager</controller_manager_node_name>
+  </plugin>
+</gazebo>

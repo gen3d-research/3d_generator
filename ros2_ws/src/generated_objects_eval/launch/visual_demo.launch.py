@@ -123,10 +123,68 @@ def _launch_setup(context):
     ]
     if loop:
         driver_cmd.append("--loop")
-    driver_cmd += ["--ros-args", "--params-file", params_file]
+    # Pass --ros-args --params-file <yaml> AND -p use_sim_time:=false so the
+    # first /joint_states message stamped by DemoNode has a wall-clock time
+    # (not the sim-time 0.0 gz_sim publishes on /clock).  Without this the
+    # MoveItPy planning_scene_monitor's wait_for_initial_state_timeout fires
+    # because the first joint state has stamp 0 -> driver crashes with
+    # "Unable to configure planning scene monitor".
+    driver_cmd += [
+        "--ros-args",
+        "--params-file", params_file,
+        "-p", "use_sim_time:=false",
+    ]
     driver = ExecuteProcess(cmd=driver_cmd, output="screen")
 
-    return [gz, rsp, world_tf, rviz, driver]
+    actions = [gz, rsp, world_tf, rviz, driver]
+
+    # Optional full gz_ros2_control integration: spawn the Panda model into
+    # the running gz world, bridge /clock, and bring up the controllers.
+    use_gz_control = LaunchConfiguration("use_gz_control").perform(context).lower() in (
+        "1", "true", "yes")
+    if use_gz_control:
+        from launch.actions import TimerAction
+        spawn = Node(
+            package="ros_gz_sim",
+            executable="create",
+            output="screen",
+            arguments=[
+                "-name", "panda",
+                "-topic", "/robot_description",
+                "-x", "0", "-y", "0", "-z", "0",
+            ],
+        )
+        clock_bridge = Node(
+            package="ros_gz_bridge",
+            executable="parameter_bridge",
+            arguments=["/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"],
+            output="log",
+        )
+        # The controller_manager is spawned by the gz_ros2_control plugin
+        # baked into the URDF.  Wait a few seconds for it to be reachable
+        # before launching the controller spawners.
+        controllers = [
+            TimerAction(period=5.0, actions=[Node(
+                package="controller_manager", executable="spawner",
+                arguments=["joint_state_broadcaster",
+                           "--controller-manager", "/controller_manager"],
+                output="screen",
+            )]),
+            TimerAction(period=6.0, actions=[Node(
+                package="controller_manager", executable="spawner",
+                arguments=["panda_arm_controller",
+                           "--controller-manager", "/controller_manager"],
+                output="screen",
+            )]),
+            TimerAction(period=7.0, actions=[Node(
+                package="controller_manager", executable="spawner",
+                arguments=["panda_hand_controller",
+                           "--controller-manager", "/controller_manager"],
+                output="screen",
+            )]),
+        ]
+        actions += [spawn, clock_bridge] + controllers
+    return actions
 
 
 def generate_launch_description():
@@ -144,5 +202,11 @@ def generate_launch_description():
         DeclareLaunchArgument("headless", default_value="false",
                               description="Run gz_sim server-only (no window); "
                                           "useful when only RViz is being recorded"),
+        DeclareLaunchArgument("use_gz_control", default_value="false",
+                              description="If true, spawn the Panda in gz_sim "
+                                          "with gz_ros2_control plus joint_state_broadcaster "
+                                          "+ panda_arm_controller + panda_hand_controller, "
+                                          "so trajectories execute in physics. Default false "
+                                          "(RViz-only animation)."),
         OpaqueFunction(function=_launch_setup),
     ])

@@ -299,7 +299,8 @@ def pose_xyz(xyz, ori=(0.0, 0.0, 0.0, 1.0)) -> Pose:
                 orientation=Quaternion(x=ori[0], y=ori[1], z=ori[2], w=ori[3]))
 
 
-def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset):
+def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
+                        execute: bool = False, moveit_py=None):
     """One full pick-and-place cycle for *entry*."""
     spawn = np.array([spawn_cfg["x"], spawn_cfg["y"], spawn_cfg["z"]])
     extents = np.array([0.05, 0.05, 0.05])
@@ -360,6 +361,15 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset):
             demo.get_logger().warn(f"     plan failed at {stage_name}")
             time.sleep(1.5)
             continue
+        # In gz_ros2_control mode we also send the trajectory to the
+        # FollowJointTrajectory controller so the Panda physically moves
+        # inside gz_sim.  In RViz-only mode (default) we just animate
+        # /joint_states locally.
+        if execute and moveit_py is not None:
+            try:
+                moveit_py.execute(traj, controllers=["panda_arm_controller"])
+            except Exception as exc:
+                demo.get_logger().warn(f"     execute failed: {exc}")
         demo.animate(traj, time_scale=1.5, min_stage_seconds=2.5)
     # Return arm to ready.
     demo.set_state(PANDA_READY, demo.hand_open)
@@ -381,6 +391,10 @@ def main():
     parser.add_argument("--place-dz", type=float, default=0.0)
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--no-gazebo-spawn", action="store_true")
+    parser.add_argument("--execute", action="store_true",
+                        help="Also send each plan to panda_arm_controller via "
+                             "moveit_py.execute() so the Panda physically moves "
+                             "inside gz_sim. Requires use_gz_control:=true.")
     args = parser.parse_args(rclpy.utilities.remove_ros_args(sys.argv)[1:])
 
     manifest = json.loads(args.manifest.read_text())
@@ -431,7 +445,8 @@ def main():
 
     try:
         while True:
-            pick_and_place_once(demo, arm, entry, spawn_cfg, place_offset)
+            pick_and_place_once(demo, arm, entry, spawn_cfg, place_offset,
+                                execute=args.execute, moveit_py=moveit_py)
             if not args.loop:
                 break
     except KeyboardInterrupt:
