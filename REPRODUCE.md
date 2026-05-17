@@ -41,7 +41,7 @@ cd ..
 ## 2. Build a per-method manifest of objects + grasps
 
 For each method (CEM, CMA-ES, GA, random search, fixed CAD), this trains under a
-1500-evaluation budget, exports the top-25 objects to URDF + SDF + meshes under
+1500-evaluation budget, exports the top-K objects to URDF + SDF + meshes under
 `output/seed_42/manifest_objects/`, and synthesises grasp candidates for each.
 The SDF collision geometry is then rewritten to the visual mesh's AABB.
 
@@ -54,6 +54,25 @@ python3 scripts/patch_sdf_collision.py \
 ```
 
 Repeat with `--seed 43` and `--seed 44` for the three-seed table.
+
+**Scaling the number of generated objects.** Two knobs control this:
+
+- `--budget N` — how many candidate objects each method *evaluates* before
+  selecting elites. 1500 is the paper setting; raise it to 5000+ for a
+  longer search at the cost of linear runtime.
+- `--top-k K` — how many objects per method end up in the manifest (and
+  therefore in the demo rotation, the MoveIt 2 evaluator, and the Gazebo
+  stability evaluator). 25 is the paper setting (5 methods × 25 = 125
+  objects per seed); use `--top-k 100` to evaluate the full top-100
+  population per method (5 × 100 = 500 objects per seed).
+
+For a completely *fresh* set of objects (no top-K filtering, no force-closure
+sampler), use the standalone generator CLI:
+
+```bash
+# 10,000 CEM-generated objects in URDF+SDF
+python3 src/main.py generate -n 10000 -o output/cem_10k --train --iterations 30
+```
 
 ## 3. Python-level evaluation
 
@@ -122,14 +141,28 @@ The aggregator prints a markdown table identical to Table II in the paper.
 cd papers/conferences/ICARM/_IEEE_ARM__*
 pdflatex new.tex && bibtex new && pdflatex new.tex && pdflatex new.tex
 
-# Track-changes against the original submission:
-latexdiff old.tex new.tex > diff.tex
-pdflatex diff.tex && pdflatex diff.tex
+# Camera-ready diff (manual \textcolor{blue}{} highlights on semantically new prose):
+pdflatex diff_new.tex && bibtex diff_new && pdflatex diff_new.tex && pdflatex diff_new.tex
 
-# Revisions-only (deletions hidden):
-python3 ../../../../scripts/make_clean_diff.py diff.tex diff_clean.tex
-pdflatex diff_clean.tex && pdflatex diff_clean.tex
+# Section IV workflow figure (Mermaid -> PNG via mermaid.ink):
+bash ../../../../scripts/render_sec_iv_workflow.sh
+
+# Twelve-archetype examples figure (matplotlib + trimesh):
+python3 ../../../../scripts/render_examples_grid.py --label \
+    --out images/generated_examples.png
 ```
+
+## 9. Run the pick-and-place demo
+
+See `DEMO.md` for the full walkthrough. Quick start:
+
+```bash
+source ros2_ws/install/setup.bash
+ros2 launch generated_objects_eval visual_demo.launch.py use_gz_control:=true
+```
+
+This animates a random object from each method in turn, with the table
+published as a CollisionObject so the planner avoids it.
 
 ## Reproduction tolerance
 

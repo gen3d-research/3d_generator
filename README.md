@@ -54,28 +54,35 @@ python main.py archetypes -o output/archetypes
 
 ### Reproducing Paper Results
 
-To generate the figures and evaluations presented in the paper:
+`REPRODUCE.md` walks through every cell of Table I end-to-end (≈ 30 minutes on a
+single CPU). Quick reference:
 
 ```bash
-# Generate figures and examples
-python scripts/generate_figures.py
+# 1. Per-seed manifest (5 methods × top-25 objects each)
+python3 scripts/build_eval_manifest.py --budget 1500 --top-k 25 --seed 42 \
+    --out output/seed_42/eval_manifest.json
+python3 scripts/patch_sdf_collision.py --manifest output/seed_42/eval_manifest.json
 
-# Run baseline comparison
-python scripts/evaluate_methods.py
+# 2. All three seeds, all three downstream metrics:
+bash scripts/run_multi_seed.sh 42 43 44
 
-# Run large-scale archetype experiment (20 archetypes, 10k objects each)
-python scripts/run_scale_experiment.py -n 10000 --iterations 30 --train
+# 3. Aggregate into the paper's table:
+python3 scripts/aggregate_seeds.py 42 43 44 --out output/aggregated.json
+cp output/aggregated.json docs/data/results.json    # refresh project page
 
-# Run baseline comparison (CEM vs Random)
-python scripts/evaluate_methods.py
+# 4. 20-archetype large-scale study (long: ~1 h):
+python3 scripts/run_scale_experiment.py -n 10000 --iterations 30 --train
 
-# Run ablation study on stability
-python scripts/run_ablation.py
-
-# OR simply run the unified reproduction script:
-./scripts/reproduce_paper.sh
-
+# 5. The pick-and-place demo (gz_sim + RViz, full physics):
+ros2 launch generated_objects_eval visual_demo.launch.py use_gz_control:=true
 ```
+
+Two knobs control how many objects flow through the pipeline:
+
+- `--top-k K` on `build_eval_manifest.py` — number of objects per method in
+  the manifest (and therefore the demo + the downstream evaluators).
+- `--budget N` on `build_eval_manifest.py` — number of candidate objects each
+  method evaluates before selecting elites.
 
 ## How It Works
 
@@ -179,18 +186,28 @@ object_0000/
 
 ### Using with MoveIt 2
 
+The demo driver (`ros2_ws/src/generated_objects_eval/generated_objects_eval/demo_plan_driver.py`)
+shows the recommended pattern under `moveit_py` 2.12.x: publish a
+`moveit_msgs/PlanningScene` *diff* on the `/planning_scene` topic instead of
+calling `moveit_py.PlanningSceneInterface.apply_collision_object` (which
+segfaults in 2.12.x on Jazzy). The driver uses this to add the table as a
+CollisionObject so RRTConnect plans around it.
+
 ```python
-# Add to planning scene
-from moveit_msgs.msg import CollisionObject
-from shape_msgs.msg import Mesh
+from moveit_msgs.msg import CollisionObject, PlanningScene, PlanningSceneWorld
+from shape_msgs.msg import SolidPrimitive
 
-# Load mesh and create collision object
-collision_object = CollisionObject()
-collision_object.id = "generated_object"
-collision_object.meshes = [load_mesh("object_0000_collision.obj")]
-collision_object.mesh_poses = [pose]
+co = CollisionObject()
+co.header.frame_id = "panda_link0"
+co.id = "demo_table"
+co.operation = CollisionObject.ADD
+prim = SolidPrimitive(type=SolidPrimitive.BOX, dimensions=[0.8, 0.8, 0.4])
+co.primitives = [prim]
+co.primitive_poses = [table_pose]   # geometry_msgs/Pose at (0.5, 0, 0.2)
 
-planning_scene.add_collision_object(collision_object)
+scene = PlanningScene(is_diff=True,
+                      world=PlanningSceneWorld(collision_objects=[co]))
+planning_scene_pub.publish(scene)   # TRANSIENT_LOCAL latched publisher
 ```
 
 ## Scoring Details

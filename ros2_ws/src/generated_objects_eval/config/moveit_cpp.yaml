@@ -12,9 +12,14 @@ planning_pipelines:
   pipeline_names: ["ompl"]
 
 plan_request_params:
-  planning_attempts: 5
+  # 15 s + 20 attempts.  Grasping a small object on a table is right at
+  # the edge of the Panda's downward reach: the wrist has to wrap over
+  # the gripper, the elbow has to be tucked high, and the table
+  # CollisionObject squeezes the feasible IK region.  With less budget
+  # RRTConnect frequently fails to sample valid goal-tree states.
+  planning_attempts: 20
   planning_pipeline: "ompl"
   max_velocity_scaling_factor: 1.0
   max_acceleration_scaling_factor: 1.0
   planner_id: "RRTConnectkConfigDefault"
-  planning_time: 2.0
+  planning_time: 15.0

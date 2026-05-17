@@ -28,6 +28,8 @@
   <depend>joint_state_broadcaster</depend>
   <depend>joint_trajectory_controller</depend>
   <depend>position_controllers</depend>
+  <depend>parallel_gripper_controller</depend>
+  <depend>control_msgs</depend>
   <depend>tf2_ros</depend>
 
   <export>

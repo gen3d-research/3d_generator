@@ -399,7 +399,8 @@
           launch that produces the dynamic-stability numbers. Full step-by-step in
           <a href="REPRODUCE.html">REPRODUCE.html</a>.
         </p>
-<pre><code># 1. Generate a manifest of top-25 objects per method.
+<pre><code># 1. Generate a manifest of top-K objects per method.
+#    --top-k 25 reproduces the paper; bump to 100 for the larger demo rotation.
 python3 scripts/build_eval_manifest.py \
     --budget 1500 --top-k 25 --seed 42 \
     --out output/eval_manifest.json
@@ -430,9 +431,15 @@ python3 scripts/aggregate_seeds.py 42 43 44 --out docs/data/results.json
         <p>
           The visual pick-and-place demo (used for the videos) is launched separately:
         </p>
-<pre><code>ros2 launch generated_objects_eval visual_demo.launch.py \
-    manifest:=../output/eval_manifest.json method:=cem loop:=true
+<pre><code>ros2 launch generated_objects_eval visual_demo.launch.py use_gz_control:=true
 </code></pre>
+        <p>
+          The launch picks <code>output/seed_42/eval_manifest.json</code> automatically,
+          spawns a different random object each cycle, publishes the table as a CollisionObject
+          so MoveIt 2 plans around it, and hands the trajectory to <code>panda_arm_controller</code>
+          so the Panda actually moves under <code>gz_ros2_control</code>. Drop the
+          <code>use_gz_control:=true</code> flag for RViz-only animation.
+        </p>
         <p>
           See <a href="DEMO.html">DEMO.html</a> for screen-recording options, the NVIDIA EGL workaround,
           and the four scene scripts.

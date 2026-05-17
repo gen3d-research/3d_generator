@@ -73,23 +73,33 @@ python3 scripts/patch_sdf_collision.py \
 
     <h2 class="title is-3">Launch the demo</h2>
     <div class="step-card">
-      <h3 class="title is-5"><span class="step-num">1</span> Side-by-side: gz_sim + RViz + MoveIt 2 pick-and-place loop</h3>
-<pre><code>ros2 launch generated_objects_eval visual_demo.launch.py \
-    manifest:=$(pwd)/output/seed_42/eval_manifest.json \
-    method:=cem loop:=true</code></pre>
-      <p>This brings up five processes:</p>
+      <h3 class="title is-5"><span class="step-num">1</span> Full pick-and-place with physics (recommended)</h3>
+<pre><code>ros2 launch generated_objects_eval visual_demo.launch.py use_gz_control:=true</code></pre>
+      <p>The launch picks <code>output/seed_42/eval_manifest.json</code> automatically; pass
+      <code>manifest:=/abs/path/eval_manifest.json</code> to point elsewhere. What this brings up:</p>
       <ol>
-        <li><code>gz sim -r</code> on the <code>panda_eval_world</code> (windowed).</li>
-        <li><code>robot_state_publisher</code> with the Panda URDF.</li>
-        <li>A static <code>world &rarr; panda_link0</code> TF (the SRDF declares a virtual_joint; without
-        this transform, RViz can't place the Panda and you would see an empty viewport).</li>
-        <li><code>rviz2</code> with the bundled <code>demo.rviz</code> config (RobotModel + scene
-        markers + the grasped-object marker).</li>
-        <li><code>demo_plan_driver</code>: spawns the CEM object in Gazebo, plans the 8-stage
-        pick-and-place sequence, and replays each plan on <code>/joint_states</code> so the
-        <code>RobotModel</code> in RViz animates end-to-end.</li>
+        <li><code>gz sim -r</code> on <code>panda_eval_world</code>; the Panda is spawned from
+        <code>/robot_description</code> via <code>ros_gz_sim create</code>.</li>
+        <li><code>gz_ros2_control</code> inside gz brings up the <code>controller_manager</code>;
+        spawners activate <code>joint_state_broadcaster</code>, <code>panda_arm_controller</code>
+        (<code>JointTrajectoryController</code>), and <code>panda_hand_controller</code>.</li>
+        <li><code>robot_state_publisher</code> + a static <code>world &rarr; panda_link0</code> TF.</li>
+        <li><code>rviz2</code> with the bundled <code>demo.rviz</code> (RobotModel + Marker displays).</li>
+        <li><code>demo_plan_driver</code>: <em>shuffles</em> the manifest, spawns one random object in
+        gz, publishes the table as a <code>CollisionObject</code> on <code>/planning_scene</code> so
+        RRTConnect plans around it, then on each cycle plans the 8-stage pick-and-place and hands
+        the trajectory to <code>panda_arm_controller</code> via <code>MoveItPy.execute()</code>.
+        Every full pass through the pool is re-shuffled.</li>
       </ol>
-      <p>The driver loops indefinitely with <code>loop:=true</code>; stop with Ctrl-C.</p>
+      <p>Pin a specific object with <code>--object-index N</code> (Argument lookup: search the
+      manifest's <code>name</code> field) or fix the shuffle with <code>--seed K</code>. Stop with
+      Ctrl-C.</p>
+
+      <h3 class="title is-5"><span class="step-num">2</span> RViz-only animation (no physics)</h3>
+<pre><code>ros2 launch generated_objects_eval visual_demo.launch.py</code></pre>
+      <p>Same driver, but <code>use_gz_control:=false</code> (default) so the planned trajectory is
+      animated directly on <code>/joint_states</code>; faster on slow GPUs and what's recorded as
+      <em>rviz_motion_plan.mp4</em> on the project page.</p>
     </div>
 
     <h2 class="title is-3">Just Gazebo (drop &amp; settle)</h2>
@@ -136,10 +146,26 @@ ffmpeg -f x11grab -framerate 30 -video_size 1280x720 -i :0.0+100,80 \
       <p>In the <code>gz sim</code> window: <em>Settings &rarr; Video Recording &rarr; Start</em>. Saves to
       <code>~/.gz/sim/videos/</code>. Useful only for the Gazebo half; doesn't capture RViz.</p>
 
-      <p>Drop the resulting mp4 files into <code>docs/videos/</code> with the names
-      <code>side_by_side.mp4</code>, <code>rviz_motion_plan.mp4</code>,
-      <code>gz_drop_settle.mp4</code>, <code>archetype_tour.mp4</code>. The project-page
-      <a href="index.html">index</a> already wires those filenames into the four video cards.</p>
+      <p>Drop the resulting mp4 files into <code>docs/videos/</code> with the names below; the
+      project-page <a href="index.html">index</a> wires those filenames into the four video cards:</p>
+
+      <table class="table is-narrow">
+        <thead><tr><th>Filename</th><th>What it shows</th><th>Run command</th></tr></thead>
+        <tbody>
+        <tr><td><code>side_by_side.mp4</code></td>
+            <td>gz_sim + RViz, full pick-and-place</td>
+            <td><code>visual_demo.launch.py use_gz_control:=true</code> (Section 1)</td></tr>
+        <tr><td><code>rviz_motion_plan.mp4</code></td>
+            <td>RViz-only animation, faster on slow GPUs</td>
+            <td><code>visual_demo.launch.py</code> (Section 2)</td></tr>
+        <tr><td><code>gz_drop_settle.mp4</code></td>
+            <td>Stability sweep, six objects</td>
+            <td><code>gazebo_stability_eval &mdash;manifest&hellip;</code> (Section 3)</td></tr>
+        <tr><td><code>archetype_tour.mp4</code></td>
+            <td>Twelve archetypes spawning in sequence</td>
+            <td><code>scripts/archetype_tour.py &mdash;per-method 4</code> (Section 4)</td></tr>
+        </tbody>
+      </table>
     </div>
 
     <h2 class="title is-3">Generate video poster frames</h2>
