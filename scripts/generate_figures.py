@@ -10,7 +10,7 @@ from pathlib import Path
 from collections import Counter
 
 # Add 3d_generator directory to path to import modules directly
-module_path = Path(__file__).parent.parent / "3d_generator"
+module_path = Path(__file__).resolve().parents[1] / "src"
 sys.path.append(str(module_path))
 
 try:

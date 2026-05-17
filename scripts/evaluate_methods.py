@@ -7,8 +7,8 @@ import os
 
 # Add 3d_generator to path
 # Use absolute path to ensure venv works correctly
-sys.path.append(str(Path(__file__).parent.parent / "3d_generator"))
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 # Import relative if directly running from scripts/ doesn't work as expected with module layout
 try:
@@ -20,7 +20,7 @@ except ImportError:
         from scoring import ObjectScorer
     except ImportError:
         # Last resort for module resolution
-        sys.path.append(str(Path.cwd() / "3d_generator"))
+        sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
         from generator import RoboticObjectGenerator, GeneratorConfig
         from scoring import ObjectScorer
 

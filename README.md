@@ -114,15 +114,40 @@ Generated objects are exported with:
 ## Project Structure
 
 ```
-robotic_object_generator/
-├── primitives.py      # Geometric primitives (Box, Cylinder, etc.)
-├── scoring.py         # Constraint-based scoring functions
-├── cem.py             # Cross-Entropy Method optimizer
-├── export.py          # URDF/SDF export
-├── generator.py       # Main generator class
-├── main.py            # CLI entry point
-└── requirements.txt
+3d_generator/
+├── src/                      # Core Python sources
+│   ├── primitives.py            geometric primitives (Box, Cylinder, ...)
+│   ├── scoring.py               constraint-based scoring functions
+│   ├── cem.py                   Cross-Entropy Method optimizer
+│   ├── export.py                URDF/SDF exporter
+│   ├── generator.py             top-level generator class
+│   ├── baselines.py             CMA-ES / GA / Random / Fixed-CAD baselines
+│   ├── grasp_planner.py         force-closure grasp synthesiser
+│   ├── diversity.py             diversity proxies
+│   ├── archetype_cem.py         per-archetype CEM track
+│   └── main.py                  CLI entry point
+├── scripts/                  # Reproduction + analysis scripts
+│   ├── build_eval_manifest.py
+│   ├── run_unified_eval.py
+│   ├── run_multi_seed.sh
+│   ├── aggregate_seeds.py
+│   ├── patch_sdf_collision.py
+│   ├── emit_latex_table.py
+│   ├── make_clean_diff.py
+│   └── archetype_tour.py
+├── ros2_ws/src/generated_objects_eval/   # ROS 2 evaluation package
+├── docs/                                 # Project page (GitHub Pages)
+├── papers/conferences/ICARM/...          # Manuscript (new.tex, diff_new.tex, refs)
+├── README.md
+├── REPRODUCE.md
+├── DEMO.md
+├── CHANGELOG.md
+├── requirements.txt
+└── reproduce_paper.sh
 ```
+
+All Python scripts add `src/` to `sys.path` automatically; you can also
+`pip install -e .` once a `pyproject.toml` is added.
 
 ## Output Format
 

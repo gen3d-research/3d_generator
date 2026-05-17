@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # Add 3d_generator to path
-sys.path.append(str(Path(__file__).parent.parent / "3d_generator"))
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 try:
     from d3_generator.generator import RoboticObjectGenerator, GeneratorConfig

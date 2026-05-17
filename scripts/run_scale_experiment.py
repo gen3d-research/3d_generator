@@ -1,7 +1,7 @@
 
 import sys
 import os
-sys.path.append(os.getcwd())
+sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 import argparse
 import numpy as np
@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import List, Dict
 
-sys.path.append(str(Path.cwd() / "3d_generator"))
+sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from primitives import (
     create_simple_box, create_mug_like, create_l_shape, 

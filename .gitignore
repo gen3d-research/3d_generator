@@ -35,3 +35,7 @@ Thumbs.db
 *.tmp
 *.swp
 *.swo
+
+# Paper sources are kept private; the manuscript is not tracked here.
+papers/
+papers/**
