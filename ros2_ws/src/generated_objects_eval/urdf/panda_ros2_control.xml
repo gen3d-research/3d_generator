@@ -1,11 +1,14 @@
 <!-- ros2_control + gz_ros2_control fragment for the Panda.
 
-     Concatenated onto panda_base.urdf before </robot> by the launch
-     file's URDF-building helper.  Two pieces:
-       1. <ros2_control name="GazeboSystem" type="system"> block exposing
-          7 arm joints + 1 finger joint (the other finger mimics).
-       2. <gazebo><plugin> block loading the gz_ros2_control plugin and
-          pointing it at the package's ros2_controllers.yaml.
+     Spliced onto panda_base.urdf before </robot> by build_panda_urdf().
+     Two pieces:
+       1. <ros2_control> block exposing 7 arm joints + both finger joints.
+       2. <gazebo><plugin> block loading gz_ros2_control-system.
+
+     The mimic on panda_finger_joint2 is stripped by build_panda_urdf()
+     because DART rejects mimic constraints; both fingers are therefore
+     listed explicitly here so gz_ros2_control can hold them at their
+     initial positions.
 -->
 
 <ros2_control name="GazeboSystem" type="system">
@@ -70,13 +73,20 @@
     </state_interface>
     <state_interface name="velocity"/>
   </joint>
-  <!-- panda_finger_joint2 mimics panda_finger_joint1 (declared in the URDF),
-       so it does not need its own state/command interfaces. -->
+  <joint name="panda_finger_joint2">
+    <command_interface name="position"/>
+    <state_interface name="position">
+      <param name="initial_value">0.035</param>
+    </state_interface>
+    <state_interface name="velocity"/>
+  </joint>
 </ros2_control>
 
 <gazebo>
   <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
     <parameters>$(GENERATED_OBJECTS_EVAL_CONFIG)/ros2_controllers.yaml</parameters>
+    <robot_param>robot_description</robot_param>
+    <robot_param_node>robot_state_publisher</robot_param_node>
     <controller_manager_node_name>controller_manager</controller_manager_node_name>
   </plugin>
 </gazebo>

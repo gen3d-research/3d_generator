@@ -27,10 +27,19 @@ from pathlib import Path
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
+from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
+                            OpaqueFunction, SetEnvironmentVariable)
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
+
+
+def _ros_plugin_path() -> str:
+    ros_lib = "/opt/ros/jazzy/lib"
+    existing = os.environ.get("GZ_SIM_SYSTEM_PLUGIN_PATH", "")
+    if existing and ros_lib not in existing.split(os.pathsep):
+        return ros_lib + os.pathsep + existing
+    return ros_lib if not existing else existing
 
 
 def _build_params_file() -> str:
@@ -67,8 +76,20 @@ def _launch_setup(context):
     loop = LaunchConfiguration("loop").perform(context).lower() in ("1", "true", "yes")
     render_engine = LaunchConfiguration("render_engine").perform(context)
     headless = LaunchConfiguration("headless").perform(context).lower() in ("1", "true", "yes")
+    use_gz_control = LaunchConfiguration("use_gz_control").perform(context).lower() in (
+        "1", "true", "yes")
 
     params_file, moveit_config = _build_params_file()
+
+    # When wiring up gz_ros2_control we need the augmented URDF (world
+    # anchor + inertials + ros2_control + gazebo plugin block) on
+    # /robot_description so both ros_gz_sim create and the gz plugin see
+    # it.  In RViz-only mode we keep the lighter MoveIt URDF.
+    if use_gz_control:
+        from generated_objects_eval.build_panda_urdf import build_panda_urdf
+        rsp_robot_description = {"robot_description": build_panda_urdf()}
+    else:
+        rsp_robot_description = moveit_config.robot_description
 
     gz_cmd = ["gz", "sim", "-r"]
     if headless:
@@ -89,7 +110,7 @@ def _launch_setup(context):
         executable="robot_state_publisher",
         name="robot_state_publisher",
         output="log",
-        parameters=[moveit_config.robot_description, use_sim_time],
+        parameters=[rsp_robot_description, use_sim_time],
     )
     # RViz needs a world -> panda_link0 TF for the RobotModel display.
     world_tf = Node(
@@ -138,10 +159,6 @@ def _launch_setup(context):
 
     actions = [gz, rsp, world_tf, rviz, driver]
 
-    # Optional full gz_ros2_control integration: spawn the Panda model into
-    # the running gz world, bridge /clock, and bring up the controllers.
-    use_gz_control = LaunchConfiguration("use_gz_control").perform(context).lower() in (
-        "1", "true", "yes")
     if use_gz_control:
         from launch.actions import TimerAction
         spawn = Node(
@@ -160,28 +177,26 @@ def _launch_setup(context):
             arguments=["/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"],
             output="log",
         )
-        # The controller_manager is spawned by the gz_ros2_control plugin
-        # baked into the URDF.  Wait a few seconds for it to be reachable
-        # before launching the controller spawners.
+        # gz_ros2_control's controller_manager comes up inside gz_sim
+        # several seconds after the model spawns; the spawners need both
+        # a generous TimerAction delay and an explicit
+        # --controller-manager-timeout so they don't FATAL out before
+        # the service appears.
+        def _spawner(controller):
+            return Node(
+                package="controller_manager", executable="spawner",
+                arguments=[
+                    controller,
+                    "--controller-manager", "/controller_manager",
+                    "--controller-manager-timeout", "60",
+                ],
+                output="screen",
+                parameters=[use_sim_time],
+            )
         controllers = [
-            TimerAction(period=5.0, actions=[Node(
-                package="controller_manager", executable="spawner",
-                arguments=["joint_state_broadcaster",
-                           "--controller-manager", "/controller_manager"],
-                output="screen",
-            )]),
-            TimerAction(period=6.0, actions=[Node(
-                package="controller_manager", executable="spawner",
-                arguments=["panda_arm_controller",
-                           "--controller-manager", "/controller_manager"],
-                output="screen",
-            )]),
-            TimerAction(period=7.0, actions=[Node(
-                package="controller_manager", executable="spawner",
-                arguments=["panda_hand_controller",
-                           "--controller-manager", "/controller_manager"],
-                output="screen",
-            )]),
+            TimerAction(period=8.0, actions=[_spawner("joint_state_broadcaster")]),
+            TimerAction(period=10.0, actions=[_spawner("panda_arm_controller")]),
+            TimerAction(period=12.0, actions=[_spawner("panda_hand_controller")]),
         ]
         actions += [spawn, clock_bridge] + controllers
     return actions
@@ -189,6 +204,13 @@ def _launch_setup(context):
 
 def generate_launch_description():
     return LaunchDescription([
+        # gz_sim only searches GZ_SIM_SYSTEM_PLUGIN_PATH for its system
+        # plugins; the ROS plugin libs (incl. gz_ros2_control-system) live
+        # in /opt/ros/jazzy/lib, so prepend that.  rmw_zenoh_cpp (Jazzy
+        # default) drops some controller_manager services intermittently,
+        # so pin everything this launch starts to rmw_fastrtps_cpp.
+        SetEnvironmentVariable("GZ_SIM_SYSTEM_PLUGIN_PATH", _ros_plugin_path()),
+        SetEnvironmentVariable("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp"),
         DeclareLaunchArgument("manifest"),
         DeclareLaunchArgument("method", default_value="cem",
                               description="Which method to pull an object from"),

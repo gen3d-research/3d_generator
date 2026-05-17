@@ -3,23 +3,26 @@
 No MoveIt, no Gazebo, no animation --- just the bare components needed for
 RViz to draw the Panda's RobotModel:
 
-    robot_state_publisher : the URDF on /robot_description + /tf
-    joint_state_publisher : a default joint vector (Panda 'ready' pose)
-    static_transform_publisher : world -> panda_link0
-    rviz2 : with the bundled demo.rviz config (RobotModel + Grid)
+    robot_state_publisher       : URDF on /robot_description + /tf
+    home_joint_state_publisher  : Panda 'ready' pose on /joint_states
+    static_transform_publisher  : world -> panda_link0
+    rviz2                       : with the bundled demo.rviz config
 
-Run::
-
-    ros2 launch generated_objects_eval arm_sim.launch.py
-
-If the arm renders here but NOT in visual_demo, the bug is in the demo
+If the arm renders here but not in visual_demo, the bug is in the demo
 driver / MoveIt wiring, not in the URDF or RViz config.
+
+Implementation note: ``home_joint_state_publisher`` is an ament_python
+console_scripts entry point, so it is installed under ``install/.../bin/``
+rather than the ``lib/<pkg>/`` directory that ``launch_ros.Node`` searches.
+We therefore launch it via ``ExecuteProcess`` (the entry-point script is
+on ``PATH`` once the workspace is sourced).
 """
 
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import ExecuteProcess
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 
@@ -47,14 +50,10 @@ def generate_launch_description():
         output="log",
         parameters=[moveit_config.robot_description, use_sim_time],
     )
-    # Pin the Panda to its SRDF "ready" configuration so the arm is in a
-    # nice extended pose rather than the self-collision all-zero pose.
-    jsp = Node(
-        package="generated_objects_eval",
-        executable="home_joint_state_publisher",
-        name="home_joint_state_publisher",
+    jsp = ExecuteProcess(
+        cmd=["home_joint_state_publisher",
+             "--ros-args", "-p", "use_sim_time:=false"],
         output="log",
-        parameters=[use_sim_time],
     )
     world_tf = Node(
         package="tf2_ros",
