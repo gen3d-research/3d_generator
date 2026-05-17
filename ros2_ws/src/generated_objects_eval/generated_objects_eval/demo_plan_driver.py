@@ -86,13 +86,27 @@ class DemoNode(Node):
 
     def __init__(self, hand_open: float = 0.04, hand_closed: float = 0.0):
         super().__init__("demo_plan_driver_pub")
+        # Force wall-clock — keep our stamps aligned with
+        # static_transform_publisher's wall-clock-stamped /tf_static.
+        try:
+            from rclpy.parameter import Parameter
+            self.set_parameters([Parameter("use_sim_time", Parameter.Type.BOOL, False)])
+        except Exception:
+            pass
         latched = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
-        self.joint_pub = self.create_publisher(JointState, "/joint_states", 10)
+        # /joint_states: best-effort + KEEP_LAST(1) so RViz always renders the
+        # newest joint vector (rival 30 Hz publishers cannot stall us).
+        js_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=5,
+        )
+        self.joint_pub = self.create_publisher(JointState, "/joint_states", js_qos)
         self.scene_pub = self.create_publisher(Marker, "/demo_scene_markers", latched)
         self.grasped_pub = self.create_publisher(
             MarkerArray, "/demo_grasped_object", latched)
@@ -102,8 +116,8 @@ class DemoNode(Node):
         self._current_grip = hand_open
         self._lock = threading.Lock()
         self._stop = False
-        # Keep the joint_states topic alive with the current pose at 30 Hz.
-        self.create_timer(1.0 / 30.0, self._publish_current)
+        # 60 Hz — high enough to dominate any 30 Hz rival publisher in RViz.
+        self.create_timer(1.0 / 60.0, self._publish_current)
 
     def _publish_current(self):
         with self._lock:
@@ -397,14 +411,20 @@ def main():
     print("=" * 70, flush=True)
     print("", flush=True)
 
+    # Order is load-bearing: create the rclpy DemoNode *before* MoveItPy
+    # because MoveItPy's ctor calls rclcpp::init() which has, in some
+    # moveit_py 2.12.x builds, clobbered the rclpy graph (DemoNode then
+    # silently does not register, and nothing reaches /joint_states).
     rclpy.init()
-    from moveit.planning import MoveItPy
-    moveit_py = MoveItPy(node_name="demo_plan_driver")
-    arm = moveit_py.get_planning_component("panda_arm")
-
     demo = DemoNode()
     spinner = threading.Thread(target=rclpy.spin, args=(demo,), daemon=True)
     spinner.start()
+    # Give the publisher time to advertise before MoveItPy seizes rclcpp.
+    time.sleep(0.5)
+
+    from moveit.planning import MoveItPy
+    moveit_py = MoveItPy(node_name="demo_plan_driver")
+    arm = moveit_py.get_planning_component("panda_arm")
 
     spawn_cfg = {"x": args.spawn_x, "y": args.spawn_y, "z": args.spawn_z}
     place_offset = (args.place_dx, args.place_dy, args.place_dz)

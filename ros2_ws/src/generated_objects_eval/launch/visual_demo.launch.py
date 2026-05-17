@@ -75,21 +75,29 @@ def _launch_setup(context):
         gz_cmd.append("-s")
     gz_cmd += ["--render-engine", render_engine, str(world)]
     gz = ExecuteProcess(cmd=gz_cmd, output="screen")
+    # Force wall-clock time everywhere so the TF chain published by
+    # static_transform_publisher (wall-clock) and the per-frame transforms
+    # published by robot_state_publisher (driven by /joint_states stamps,
+    # also wall-clock) line up with what RViz looks up.  Without this,
+    # RViz auto-detects gz_sim's /clock and switches to sim time, the TF
+    # buffer has nothing for the wall-clock stamp it queries with, and the
+    # RobotModel display silently fails to position any link.
+    use_sim_time = {"use_sim_time": False}
+
     rsp = Node(
         package="robot_state_publisher",
         executable="robot_state_publisher",
         name="robot_state_publisher",
         output="log",
-        parameters=[moveit_config.robot_description],
+        parameters=[moveit_config.robot_description, use_sim_time],
     )
-    # The demo driver publishes /joint_states itself (replaying each planned
-    # trajectory at its native time scale so the Panda animates in RViz).
-    # RViz still needs a world -> panda_link0 TF for the RobotModel display.
+    # RViz needs a world -> panda_link0 TF for the RobotModel display.
     world_tf = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
         name="world_to_panda_link0",
         output="log",
+        parameters=[use_sim_time],
         arguments=["--x", "0", "--y", "0", "--z", "0",
                    "--roll", "0", "--pitch", "0", "--yaw", "0",
                    "--frame-id", "world", "--child-frame-id", "panda_link0"],
@@ -105,6 +113,7 @@ def _launch_setup(context):
             moveit_config.robot_description_semantic,
             moveit_config.robot_description_kinematics,
             moveit_config.planning_pipelines,
+            use_sim_time,
         ],
     )
     driver_cmd = [
