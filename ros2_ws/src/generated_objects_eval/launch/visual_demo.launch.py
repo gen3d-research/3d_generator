@@ -42,7 +42,32 @@ def _ros_plugin_path() -> str:
     return ros_lib if not existing else existing
 
 
-def _build_params_file() -> str:
+def _default_manifest() -> str:
+    """Find a sensible default manifest so the demo runs with no args.
+
+    Looks for the seed_42 manifest under the project's ``output/`` tree
+    (relative to the workspace root that hosts this ros2_ws), then any
+    ``output/**/eval_manifest.json``, then ``""`` if nothing is found.
+    The caller is expected to ``DeclareLaunchArgument("manifest",
+    default_value=_default_manifest())`` and surface a friendly error
+    when the path is empty.
+    """
+    candidates = [
+        Path("/home/asmbatati/text2geometry_ws/3d_generator/output/seed_42/eval_manifest.json"),
+        Path("/home/asmbatati/text2geometry_ws/3d_generator/output/eval_manifest.json"),
+    ]
+    for c in candidates:
+        if c.is_file():
+            return str(c)
+    # Last-ditch glob.
+    root = Path("/home/asmbatati/text2geometry_ws/3d_generator/output")
+    if root.is_dir():
+        for m in root.rglob("eval_manifest.json"):
+            return str(m)
+    return ""
+
+
+def _build_params_file(use_sim_time: bool = False) -> str:
     moveit_config = (
         MoveItConfigsBuilder("moveit_resources_panda")
         .robot_description(
@@ -59,6 +84,10 @@ def _build_params_file() -> str:
         .to_moveit_configs()
     )
     cfg = moveit_config.to_dict()
+    # MoveItPy spawns its own internal node which doesn't inherit the
+    # launching process's ``-p use_sim_time:=...`` flag, so we have to
+    # bake the clock domain into the params YAML under the /** wildcard.
+    cfg["use_sim_time"] = use_sim_time
     params = {"/**": {"ros__parameters": cfg}}
     fd, path = tempfile.mkstemp(prefix="visual_demo_params_", suffix=".yaml")
     with os.fdopen(fd, "w") as f:
@@ -72,6 +101,12 @@ def _launch_setup(context):
     rviz_cfg = share / "config" / "demo.rviz"
 
     manifest = LaunchConfiguration("manifest").perform(context)
+    if not manifest or not Path(manifest).is_file():
+        raise RuntimeError(
+            f"manifest path '{manifest}' does not exist. Pass an absolute "
+            "path to an eval_manifest.json, e.g.\n"
+            "  ros2 launch generated_objects_eval visual_demo.launch.py \\\n"
+            "      manifest:=/abs/path/output/seed_42/eval_manifest.json")
     method = LaunchConfiguration("method").perform(context)
     loop = LaunchConfiguration("loop").perform(context).lower() in ("1", "true", "yes")
     render_engine = LaunchConfiguration("render_engine").perform(context)
@@ -79,7 +114,7 @@ def _launch_setup(context):
     use_gz_control = LaunchConfiguration("use_gz_control").perform(context).lower() in (
         "1", "true", "yes")
 
-    params_file, moveit_config = _build_params_file()
+    params_file, moveit_config = _build_params_file(use_sim_time=use_gz_control)
 
     # When wiring up gz_ros2_control we need the augmented URDF (world
     # anchor + inertials + ros2_control + gazebo plugin block) on
@@ -96,14 +131,24 @@ def _launch_setup(context):
         gz_cmd.append("-s")
     gz_cmd += ["--render-engine", render_engine, str(world)]
     gz = ExecuteProcess(cmd=gz_cmd, output="screen")
-    # Force wall-clock time everywhere so the TF chain published by
-    # static_transform_publisher (wall-clock) and the per-frame transforms
-    # published by robot_state_publisher (driven by /joint_states stamps,
-    # also wall-clock) line up with what RViz looks up.  Without this,
-    # RViz auto-detects gz_sim's /clock and switches to sim time, the TF
-    # buffer has nothing for the wall-clock stamp it queries with, and the
-    # RobotModel display silently fails to position any link.
-    use_sim_time = {"use_sim_time": False}
+    # Clock domain depends on the integration mode:
+    #
+    # * RViz-only animation (use_gz_control=false): wall-clock everywhere.
+    #   DemoNode publishes /joint_states stamped from time.time(),
+    #   robot_state_publisher and static_transform_publisher echo those
+    #   stamps onto /tf, RViz looks them up at wall-clock now().  If we
+    #   let RViz auto-switch to sim time here the TF buffer has nothing
+    #   to match and the RobotModel silently fails to position any link.
+    #
+    # * gz_ros2_control mode (use_gz_control=true): sim-time everywhere.
+    #   joint_state_broadcaster inside gz publishes /joint_states with
+    #   /clock stamps (starting at 0 and lagging wall-clock by ~10 s
+    #   while gz_sim boots).  MoveItPy's planning_scene_monitor compares
+    #   the latest /joint_states stamp against its node clock at
+    #   construction; if those clocks disagree it FATALs out with
+    #   "Unable to configure planning scene monitor" -- which is exactly
+    #   what happened before this switch was conditional.
+    use_sim_time = {"use_sim_time": use_gz_control}
 
     rsp = Node(
         package="robot_state_publisher",
@@ -144,20 +189,34 @@ def _launch_setup(context):
     ]
     if loop:
         driver_cmd.append("--loop")
-    # Pass --ros-args --params-file <yaml> AND -p use_sim_time:=false so the
-    # first /joint_states message stamped by DemoNode has a wall-clock time
-    # (not the sim-time 0.0 gz_sim publishes on /clock).  Without this the
-    # MoveItPy planning_scene_monitor's wait_for_initial_state_timeout fires
-    # because the first joint state has stamp 0 -> driver crashes with
-    # "Unable to configure planning scene monitor".
+    # When the gz_ros2_control stack is wired in, hand each plan to
+    # MoveItPy.execute() so the FollowJointTrajectory controller drives
+    # the Panda in physics.  Without --execute the driver only animates
+    # the plan in its own /joint_states publisher, which is the right
+    # mode for RViz-only recording but does nothing in Gazebo.
+    if use_gz_control:
+        driver_cmd.append("--execute")
+    # Match the driver's clock to the rest of the stack (see the
+    # use_sim_time comment above).  In gz_ros2_control mode this also
+    # gives the planning_scene_monitor a /clock-stamped /joint_states
+    # message to anchor on; in RViz-only mode it forces wall-clock so
+    # DemoNode's first /joint_states is not stamped with sim-time 0.
     driver_cmd += [
         "--ros-args",
         "--params-file", params_file,
-        "-p", "use_sim_time:=false",
+        "-p", f"use_sim_time:={'true' if use_gz_control else 'false'}",
     ]
     driver = ExecuteProcess(cmd=driver_cmd, output="screen")
 
-    actions = [gz, rsp, world_tf, rviz, driver]
+    # In gz_ros2_control mode the driver MUST start AFTER joint_state_broadcaster
+    # is publishing /joint_states with sim-time stamps, otherwise MoveItPy's
+    # planning_scene_monitor fails its "recent joint state" check and the
+    # whole driver crashes during MoveItPy() construction.
+    if use_gz_control:
+        from launch.actions import TimerAction
+        actions = [gz, rsp, world_tf, rviz, TimerAction(period=15.0, actions=[driver])]
+    else:
+        actions = [gz, rsp, world_tf, rviz, driver]
 
     if use_gz_control:
         from launch.actions import TimerAction
@@ -211,7 +270,12 @@ def generate_launch_description():
         # so pin everything this launch starts to rmw_fastrtps_cpp.
         SetEnvironmentVariable("GZ_SIM_SYSTEM_PLUGIN_PATH", _ros_plugin_path()),
         SetEnvironmentVariable("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp"),
-        DeclareLaunchArgument("manifest"),
+        DeclareLaunchArgument(
+            "manifest",
+            default_value=_default_manifest(),
+            description="Absolute path to an eval_manifest.json. Defaults "
+                        "to output/seed_42/eval_manifest.json under the "
+                        "project root if present."),
         DeclareLaunchArgument("method", default_value="cem",
                               description="Which method to pull an object from"),
         DeclareLaunchArgument("loop", default_value="true",

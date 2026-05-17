@@ -1,0 +1,12 @@
+%% Section IV workflow diagram for the ICARM paper.
+%% Render to PNG via mermaid.ink (see scripts/render_sec_iv_workflow.sh)
+%% or any local mmdc/Kroki instance.
+graph LR
+  M["Manifest<br/>top-K objects<br/>+ grasp candidates"] --> P["MoveIt 2<br/>RRTConnect<br/>(pre-grasp plan)"]
+  M --> G["gz_sim<br/>settle 2.5 s<br/>(drift + tilt)"]
+  P --> A["Aggregated<br/>downstream<br/>metrics JSON"]
+  G --> A
+  classDef store fill:#E8F0FE,stroke:#1A73E8,color:#1A1A1A;
+  classDef proc fill:#FFF7E0,stroke:#F4B400,color:#1A1A1A;
+  class M,A store;
+  class P,G proc;
