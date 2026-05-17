@@ -49,22 +49,25 @@ _INERTIAL_STUB = """    <inertial>
 
 # High-friction surface for the Panda finger pads.  Without this DART
 # uses its default ``mu`` (~1.0) for the finger-object contact and the
-# generated objects slip out the moment the arm starts to lift.  ``mu=5``
-# plus contact stiffness give enough static friction to hold the small
-# (~150 g) generated objects in a squeezed grasp through the lift and
-# transport stages.
+# generated objects slip out the moment the arm starts to lift.
+# mu=30 matches the Robotiq 85 finger-tip values used in the ROS 2
+# Manipulation Masterclass course
+# (moveit_course_humble/13/.../robotiq_85_gripper_macro_gz.urdf.xacro
+# lines 56-57, 76-77).  Combined with the DetachableJoint plugin baked
+# into each object's SDF, this gives a firm contact backing the rigid
+# attach the driver triggers when the gripper closes.
 _FINGER_FRICTION = """
 <gazebo reference="panda_leftfinger">
-  <mu1>5.0</mu1>
-  <mu2>5.0</mu2>
+  <mu1>30.0</mu1>
+  <mu2>30.0</mu2>
   <kp>1000000.0</kp>
   <kd>100.0</kd>
   <minDepth>0.001</minDepth>
   <maxVel>0.1</maxVel>
 </gazebo>
 <gazebo reference="panda_rightfinger">
-  <mu1>5.0</mu1>
-  <mu2>5.0</mu2>
+  <mu1>30.0</mu1>
+  <mu2>30.0</mu2>
   <kp>1000000.0</kp>
   <kd>100.0</kd>
   <minDepth>0.001</minDepth>

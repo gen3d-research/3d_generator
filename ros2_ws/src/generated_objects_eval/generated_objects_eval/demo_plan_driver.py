@@ -97,6 +97,23 @@ def despawn_in_gazebo(name: str) -> None:
     )
 
 
+def gz_topic_publish(topic: str,
+                     msg_type: str = "gz.msgs.Empty",
+                     payload: str = "unused: true") -> bool:
+    """Fire one ``gz topic`` publish.
+
+    Used to toggle each object's DetachableJoint plugin on
+    ``/<name>/attach`` and ``/<name>/detach``.  The plugin's input is
+    ``gz.msgs.Empty``; the payload string is irrelevant but a non-empty
+    body is required for ``gz topic -p`` to actually publish.
+    """
+    proc = subprocess.run(
+        ["gz", "topic", "-t", topic, "-m", msg_type, "-p", payload],
+        capture_output=True, timeout=4.0,
+    )
+    return proc.returncode == 0
+
+
 # ---------------------------------------------------------------------------
 
 class DemoNode(Node):
@@ -471,6 +488,11 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
         ("open",      None,  None,     False),
         ("retract",   retract, approach, False),
     ]
+    # Only weld the object to panda_hand if the gripper actually reached
+    # the grasp pose.  Without this, a failed grasp plan would still
+    # trigger the DetachableJoint plugin and freeze the object 30 cm
+    # below the wrist (wherever panda_hand happens to be in "ready").
+    gripper_at_object = False
     for stage_name, xyz, app, gripper_closed in sequence:
         demo.get_logger().info(f"  -> {stage_name}")
         # Gripper width state.  In RViz-only mode this drives the
@@ -490,6 +512,27 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
             ok = demo.send_gripper_goal(target, max_effort=effort)
             demo.get_logger().info(
                 f"     gripper {stage_name} -> {'ok' if ok else 'no server'}")
+            # Trigger the DetachableJoint plugin baked into the object's
+            # SDF.  Attach welds the object to panda_hand so lift /
+            # transport / place carry it along in physics; detach
+            # releases it onto the place location.  When --execute is
+            # not set (RViz-only mode) the plugin isn't loaded into the
+            # world, so the topics simply have no subscribers — the
+            # publish is cheap and silent.
+            if stage_name == "close":
+                if gripper_at_object:
+                    gz_topic_publish(f"/{entry['name']}/attach")
+                    demo.get_logger().info(
+                        f"     attach object {entry['name']} -> panda_hand")
+                else:
+                    demo.get_logger().warn(
+                        f"     skip attach: grasp pose was unreachable, "
+                        f"gripper is not at {entry['name']}")
+            else:
+                gz_topic_publish(f"/{entry['name']}/detach")
+                demo.get_logger().info(
+                    f"     detach object {entry['name']}")
+                gripper_at_object = False
         # Attach / detach the object marker.
         if stage_name in ("lift", "transport", "place"):
             # marker attached to the gripper hand, slightly below it
@@ -523,6 +566,11 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
             except Exception as exc:
                 demo.get_logger().warn(f"     execute failed: {exc}")
         demo.animate(traj, time_scale=1.5, min_stage_seconds=2.5)
+        # Mark the gripper as "at the object" once a successful plan
+        # brings panda_link8 to the grasp pose.  The next "close" stage
+        # will only fire the DetachableJoint attach if this flag is True.
+        if stage_name == "grasp":
+            gripper_at_object = True
     # Return arm to ready.
     demo.set_state(PANDA_READY, demo.hand_open)
     time.sleep(0.8)
@@ -542,7 +590,11 @@ def main():
                         help="Random seed for the shuffle (default: clock).")
     parser.add_argument("--spawn-x", type=float, default=0.5)
     parser.add_argument("--spawn-y", type=float, default=0.0)
-    parser.add_argument("--spawn-z", type=float, default=0.42)
+    parser.add_argument("--spawn-z", type=float, default=0.45,
+                        help="Drop height in metres above the world origin. "
+                             "Default 0.45 spawns the object 5 cm above the "
+                             "table top (z=0.40) so it falls under gravity "
+                             "and physically lands on the table.")
     parser.add_argument("--place-dx", type=float, default=0.0)
     parser.add_argument("--place-dy", type=float, default=0.15)
     parser.add_argument("--place-dz", type=float, default=0.0)
@@ -579,6 +631,12 @@ def main():
         if spawn_in_gazebo(Path(entry["sdf"]), entry["name"],
                            args.spawn_x, args.spawn_y, args.spawn_z):
             print(f"[demo] spawned {entry['name']} in gz_sim", flush=True)
+            # The DetachableJoint plugin in the object's SDF creates the
+            # fixed joint at spawn time.  Immediately detach so the
+            # object is free to fall onto the table under gravity, then
+            # let it settle before MoveIt plans against its resting pose.
+            gz_topic_publish(f"/{entry['name']}/detach")
+            time.sleep(0.8)
         else:
             print(f"[demo] WARN: spawn failed for {entry['name']}", flush=True)
 
@@ -634,6 +692,11 @@ def main():
                                    args.spawn_x, args.spawn_y, args.spawn_z):
                     print(f"[demo] spawned {next_entry['name']} "
                           f"(cycle {cycle})", flush=True)
+                    # Detach right after spawn (the SDF's plugin auto-
+                    # creates the fixed joint at load) and let gravity
+                    # land the object on the table before the next plan.
+                    gz_topic_publish(f"/{next_entry['name']}/detach")
+                    time.sleep(0.8)
                 else:
                     print(f"[demo] WARN: spawn failed for "
                           f"{next_entry['name']}", flush=True)
