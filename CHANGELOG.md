@@ -1,19 +1,6 @@
 # CHANGELOG
 
-Tracks revision work on the ICARM 2026 paper *Generative 3D Object Modeling for Robust Robot Manipulation in ROS 2* and the surrounding workspace. Each session records the user prompt verbatim, the agent's strategic response, and the concrete changes made.
-
----
-
-## Session 2026-05-15 — Initial repo onboarding (`/init`)
-
-**User prompt (verbatim):**
-> Please analyze this codebase and create a CLAUDE.md file, which will be given to future instances of Claude Code to operate in this repository. [...]
-
-**Response:**
-Explored `3d_generator/` (the actual git repo), `papers/`, the existing scripts and configuration, and wrote a workspace-level CLAUDE.md that captures the non-obvious bits: which directory is the git repo, that scripts are invoked from mixed working directories, the `d3_generator.*` import fallback that nothing uses, log-space dimension storage in `cem.py`, the two parallel CEM tracks (`cem.py` vs `archetype_cem.py`), and the fact that `create_archetype_set` is the canonical place where every `create_*` factory is exercised.
-
-**Changes:**
-- Added `CLAUDE.md` at the workspace root (`/home/asmbatati/text2geometry_ws/CLAUDE.md`).
+Tracks revision work on the ICARM 2026 paper *Generative 3D Object Modeling for Robust Robot Manipulation in ROS 2* and the surrounding workspace.
 
 ---
 
