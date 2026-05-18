@@ -358,14 +358,36 @@
       <div class="columns is-centered">
         <div class="column is-half">
           <div class="figure-container">
+            <img src="./static/images/comparison_grouped_bar.png" alt="Downstream success per method">
+            <p class="figure-caption">Downstream success per method (3-seed mean&nbsp;&plusmn; std). CEM dominates grasp synthesis and MoveIt&nbsp;2 planning; Gazebo stability is essentially a tie among the four optimisers.</p>
+          </div>
+        </div>
+        <div class="column is-half">
+          <div class="figure-container">
+            <img src="./static/images/stability_density.png" alt="Per-method stability margin density">
+            <p class="figure-caption">Per-object stability-margin density across the 100 top-K objects each method returns. CEM concentrates around a 2&nbsp;cm margin with a narrow peak; baselines spread broadly and leak into the negative half-plane.</p>
+          </div>
+        </div>
+      </div>
+      <div class="columns is-centered">
+        <div class="column is-half">
+          <div class="figure-container">
             <img src="./static/images/generated_examples.png" alt="Generated examples">
             <p class="figure-caption">Representative CEM-generated objects: hammer-like (cylinder + orthogonal box) and bottle-like (cylinder + sphere) compositions emerge purely from the four scoring components.</p>
           </div>
         </div>
         <div class="column is-half">
           <div class="figure-container">
-            <img src="./static/images/archetype_comparison_N10000.png" alt="Archetype scoring">
-            <p class="figure-caption">Suitability score distributions for 20 archetypes (N&nbsp;=&nbsp;10,000 each). V-shape and spatula are hardest; snowman and barbell easiest.</p>
+            <img src="./static/images/archetype_ranked_q1.png" alt="Archetype scoring ranked by Q1">
+            <p class="figure-caption">20 archetypes ranked by their first-quartile suitability score (hardest on the left). Dumbbell and snowman are the only archetypes whose Q1 does not saturate at S&nbsp;=&nbsp;1.0.</p>
+          </div>
+        </div>
+      </div>
+      <div class="columns is-centered">
+        <div class="column is-two-thirds">
+          <div class="figure-container">
+            <img src="./static/images/discussion_radar.png" alt="Three-metric downstream radar">
+            <p class="figure-caption">CEM's polygon (blue) encloses every baseline on the three downstream axes while sitting essentially on the outer ring for stability.</p>
           </div>
         </div>
       </div>

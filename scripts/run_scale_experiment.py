@@ -1,105 +1,150 @@
+#!/usr/bin/env python3
+"""Per-archetype CEM training + score-distribution figure.
 
-import sys
-import os
-sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
+Trains an ``ArchetypeTrainer`` for each of the 20 archetype factories
+defined in ``primitives.py``, scores ``-n`` objects per archetype with
+the trained distribution, then emits the score-distribution box plot
+used as Fig. 9 of the paper.
+
+Usage::
+
+    python3 scripts/run_scale_experiment.py -n 10000 --iterations 30 --train
+
+For a quick regeneration of the paper figure (faster than 10k each):
+
+    python3 scripts/run_scale_experiment.py -n 2000 --iterations 20 --train
+"""
+from __future__ import annotations
 
 import argparse
-import numpy as np
-import matplotlib.pyplot as plt
+import sys
 from pathlib import Path
-from typing import List, Dict
+from typing import List
 
-sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
+import matplotlib.pyplot as plt
+import numpy as np
 
-from primitives import (
-    create_simple_box, create_mug_like, create_l_shape, 
-    create_dumbbell, create_hammer, create_bottle,
-    create_t_shape, create_u_shape, create_v_shape, create_monitor,
-    create_barbell, create_snowman, create_camera, create_frying_pan,
-    create_flashlight, create_spatula, create_remote, create_joystick
-)
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
-from archetype_cem import ArchetypeTrainer
-from scoring import ObjectScorer
-from export import URDFExporter
+from archetype_cem import ArchetypeTrainer  # noqa: E402
+from export import URDFExporter  # noqa: E402
+from primitives import (create_barbell, create_bottle, create_camera,  # noqa: E402
+                        create_dumbbell, create_flashlight, create_flat_box,
+                        create_frying_pan, create_hammer, create_joystick,
+                        create_l_shape, create_monitor, create_mug_like,
+                        create_remote, create_small_box, create_snowman,
+                        create_spatula, create_t_shape, create_tall_box,
+                        create_u_shape, create_v_shape)
+from scoring import ObjectScorer  # noqa: E402
 
-OUTPUT_DIR = Path("3d_generator/output/scale_experiment")
-IMG_DIR = Path("images")
+OUTPUT_DIR = ROOT / "output" / "scale_experiment"
+IMG_DIR = ROOT / "images"
 
+# 20 archetypes — matches the list in ``generator.create_archetype_set``
+# and the count claimed in Section VI-D of the manuscript.
 ARCHETYPE_FUNCS = [
-    create_simple_box, create_mug_like, create_l_shape, 
-    create_dumbbell, create_hammer, create_bottle,
-    create_t_shape, create_u_shape, create_v_shape, create_monitor,
-    create_barbell, create_snowman, create_camera, create_frying_pan,
-    create_flashlight, create_spatula, create_remote, create_joystick
+    create_small_box, create_tall_box, create_flat_box,
+    create_mug_like, create_l_shape, create_dumbbell, create_hammer,
+    create_bottle, create_t_shape, create_u_shape, create_v_shape,
+    create_monitor, create_barbell, create_snowman, create_camera,
+    create_frying_pan, create_flashlight, create_spatula, create_remote,
+    create_joystick,
 ]
 
-def run_experiment(n_objects: int, iterations: int, train: bool):
+
+def run_experiment(n_objects: int, iterations: int, train: bool,
+                   export_samples: int = 0):
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     IMG_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     all_scores = {}
-    
+    failure_rates = {}
+    scorer = ObjectScorer()
+
     for func in ARCHETYPE_FUNCS:
-        name = func.__name__.replace('create_', '')
-        print(f"\nProcessing Archetype: {name}")
-        
+        name = func.__name__.replace("create_", "")
+        print(f"\n[scale] {name}: ", end="", flush=True)
         trainer = ArchetypeTrainer(func)
-        
         if train:
+            print(f"train {iterations}it; ", end="", flush=True)
             trainer.train(iterations=iterations, samples_per_iter=100)
-        
-        print(f"Generating {n_objects} objects...")
+        print(f"sample {n_objects}; ", end="", flush=True)
         objects = trainer.generate(n_objects)
-        
-        # Evaluate
-        print("Scoring...")
-        scorer = ObjectScorer()
+        print("score; ", end="", flush=True)
         scores = [scorer.score(obj).total_score for obj in objects]
         all_scores[name] = scores
-        
-        # Determine archetype specific subfolder
-        arch_dir = OUTPUT_DIR / name
-        arch_dir.mkdir(exist_ok=True)
-        
-        # Export (Optional? User said generate. 10k is a lot. Maybe export first 100?)
-        # Exporting 10k takes time.
-        # Let's export 100 sample URDFs and just save stats for the rest?
-        # User prompt: "generate 10000 ... objects"
-        # I'll randomly sub-sample 50 to export to save time/disk, unless forced.
-        # Check an arg?
-        num_export = min(n_objects, 50) 
-        print(f"Exporting sample of {num_export} objects to {arch_dir}...")
-        
-        # from export import URDFExporter (already imported at top)
+        failure_rates[name] = sum(1 for s in scores if s < 0.5) / max(1, len(scores))
 
-        exporter = URDFExporter()
-        for i in range(num_export):
-            exporter.export(objects[i], arch_dir / objects[i].name, objects[i].name)
+        if export_samples > 0:
+            arch_dir = OUTPUT_DIR / name
+            arch_dir.mkdir(exist_ok=True)
+            exporter = URDFExporter()
+            for i in range(min(export_samples, n_objects)):
+                exporter.export(objects[i], arch_dir / objects[i].name,
+                                objects[i].name)
+            print(f"export {min(export_samples, n_objects)}; ",
+                  end="", flush=True)
+        print(f"failure-rate {failure_rates[name]:.2%}", flush=True)
 
-    # Plotting
-    print("\nGenerating Diagrams...")
-    plt.figure(figsize=(15, 8))
-    
+    # Box plot.
+    print("\n[scale] writing figures ...")
     names = list(all_scores.keys())
-    data = list(all_scores.values())
-    
-    plt.boxplot(data, labels=names, patch_artist=True)
-    plt.xticks(rotation=45, ha='right')
-    plt.title(f'Score Distribution by Archetype (N={n_objects}, Trained={train})')
-    plt.ylabel('Suitability Score')
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.tight_layout()
-    
+    data: List[List[float]] = list(all_scores.values())
+
+    fig, ax = plt.subplots(figsize=(14, 5.5), dpi=150)
+    bp = ax.boxplot(data, tick_labels=names, patch_artist=True,
+                    medianprops=dict(color="black", linewidth=1.0),
+                    boxprops=dict(facecolor="#1F77B4", linewidth=0.8),
+                    flierprops=dict(marker="o", markersize=2.5,
+                                    markerfacecolor="none",
+                                    markeredgecolor="0.3"))
+    ax.set_xticklabels(names, rotation=45, ha="right")
+    ax.set_title(f"Per-archetype suitability score distribution "
+                 f"(N={n_objects}, trained={train})")
+    ax.set_ylabel("Suitability score")
+    ax.grid(True, axis="y", linestyle="--", alpha=0.5)
+    fig.tight_layout()
     plot_path = IMG_DIR / f"archetype_comparison_N{n_objects}.png"
-    plt.savefig(plot_path)
-    print(f"Saved comparison plot to {plot_path}")
+    fig.savefig(plot_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[scale] wrote {plot_path}")
+
+    # Companion bar chart of failure rates so the "below 7%" prose claim
+    # is backed by a directly readable plot.
+    fig, ax = plt.subplots(figsize=(14, 4.0), dpi=150)
+    rates = [failure_rates[n] for n in names]
+    bars = ax.bar(range(len(names)), rates,
+                  color=["#D62728" if r > 0.07 else "#1F77B4" for r in rates])
+    ax.set_xticks(range(len(names)))
+    ax.set_xticklabels(names, rotation=45, ha="right")
+    ax.axhline(0.07, color="0.4", linestyle="--", linewidth=1,
+               label="7 % reference")
+    ax.set_ylabel("Fraction with S < 0.5")
+    ax.set_title("Per-archetype failure rate "
+                 f"(score below 0.5, N={n_objects})")
+    ax.legend(loc="upper right")
+    ax.set_ylim(0, max(0.10, max(rates) * 1.2))
+    fig.tight_layout()
+    fail_path = IMG_DIR / f"archetype_failure_rate_N{n_objects}.png"
+    fig.savefig(fail_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[scale] wrote {fail_path}")
+    print("\n[scale] failure rates:")
+    for n in names:
+        print(f"    {n:<14s} {failure_rates[n]:6.2%}")
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-n", type=int, default=100, help="Number of objects per archetype")
-    parser.add_argument("--iterations", type=int, default=20, help="Training iterations")
-    parser.add_argument("--train", action="store_true", help="Enable training")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("-n", type=int, default=2000,
+                        help="Objects per archetype")
+    parser.add_argument("--iterations", type=int, default=20,
+                        help="Training iterations")
+    parser.add_argument("--train", action="store_true",
+                        help="Train the per-archetype CEM")
+    parser.add_argument("--export-samples", type=int, default=0,
+                        help="Export this many sample URDFs per archetype "
+                             "(0 = none).")
     args = parser.parse_args()
-    
-    run_experiment(args.n, args.iterations, args.train)
+    run_experiment(args.n, args.iterations, args.train, args.export_samples)

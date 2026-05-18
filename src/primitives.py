@@ -295,12 +295,37 @@ def create_simple_box(dims: np.ndarray, position: np.ndarray = None) -> Composit
     """Create a simple box object."""
     if position is None:
         position = np.array([0, 0, dims[2]/2])  # Rest on ground
-    
+
     box = Box(
         dimensions=dims,
         transform=Transform(translation=position)
     )
     return CompositeObject(primitives=[box], name="simple_box")
+
+
+# Three concrete simple-box variants used by ``create_archetype_set`` and
+# the per-archetype CEM scale experiment.  Each has a default ``dims``
+# vector so ``ArchetypeDistribution._introspect_params`` learns a
+# Gaussian over the dimensions centered on this archetype's footprint.
+def create_small_box(dims: np.ndarray = np.array([0.04, 0.04, 0.04])
+                     ) -> CompositeObject:
+    obj = create_simple_box(dims)
+    obj.name = "small_box"
+    return obj
+
+
+def create_tall_box(dims: np.ndarray = np.array([0.03, 0.03, 0.10])
+                    ) -> CompositeObject:
+    obj = create_simple_box(dims)
+    obj.name = "tall_box"
+    return obj
+
+
+def create_flat_box(dims: np.ndarray = np.array([0.08, 0.06, 0.02])
+                    ) -> CompositeObject:
+    obj = create_simple_box(dims)
+    obj.name = "flat_box"
+    return obj
 
 
 def create_mug_like(

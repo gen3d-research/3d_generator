@@ -14,9 +14,22 @@ A lightweight, dataset-free framework for generating diverse 3D objects suitable
 
 ## Installation
 
+The project targets Python 3.10+. We keep the virtual environment outside the
+repo so build artefacts don't churn it:
+
 ```bash
+# 1. Create a dedicated venv (one-off):
+python3 -m venv ~/venv/3d_cem
+
+# 2. Activate it (every shell):
+source ~/venv/3d_cem/bin/activate
+
+# 3. Install the Python dependencies:
 pip install -r requirements.txt
 ```
+
+After activation, all `python main.py …` and `python scripts/…` invocations
+below will pick up the right NumPy / matplotlib / trimesh / cma versions.
 
 ## Quick Start
 

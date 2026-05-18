@@ -1,6 +1,6 @@
-# Generated artifacts
-output/
-images/
+# Generated artifacts (anchored: only the top-level dirs, not e.g. docs/static/images)
+/output/
+/images/
 3d_generator/output/
 
 # Python bytecode

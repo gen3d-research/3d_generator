@@ -27,8 +27,11 @@ class ArchetypeDistribution:
         """Guess parameters from function signature."""
         sig = inspect.signature(self.factory_fn)
         for name, param in sig.parameters.items():
-            # Check for required parameters (no default)
-            if param.default == inspect.Parameter.empty:
+            # Check for required parameters (no default).  Use `is`
+            # rather than `==` here because some defaults are numpy
+            # arrays, and ``np.array(...) == sentinel`` returns an
+            # array (not a bool) which raises in the truthiness check.
+            if param.default is inspect.Parameter.empty:
                 # Heuristic for required params
                 if "dims" in name or "size" in name:
                      # vector 3

@@ -5,11 +5,17 @@ echo "========================================================"
 echo "  Reproducing 3D Object Generation Paper Results"
 echo "========================================================"
 
-# Activate virtual environment
-if [ -d "venv" ]; then
+# Activate the project virtual environment.  Prefer the canonical
+# ~/venv/3d_cem location (see README §Installation); fall back to a
+# legacy in-repo ./venv if a developer still keeps one around.
+if [ -d "$HOME/venv/3d_cem" ]; then
+    source "$HOME/venv/3d_cem/bin/activate"
+elif [ -d "venv" ]; then
     source venv/bin/activate
 else
-    echo "Error: Virtual environment not found. Please run installation first."
+    echo "Error: Virtual environment not found." \
+         "Create one with 'python3 -m venv ~/venv/3d_cem' and run" \
+         "'pip install -r requirements.txt' inside it before retrying."
     exit 1
 fi
 
