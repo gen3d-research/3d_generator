@@ -356,6 +356,7 @@ def paper_repro_generator(seed: int = 42) -> 'RoboticObjectGenerator':
     type_probs[:4] = [0.4, 0.35, 0.15, 0.1]
     gen.distribution.primitive_type_probs = type_probs
     gen.distribution.n_primitives_probs = np.array([0.3, 0.4, 0.2, 0.1])
+    gen.distribution.structured_placement = False   # v1 used free random offsets
     return gen
 
 

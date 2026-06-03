@@ -74,7 +74,7 @@ def main():
     named = []
     for name, fn in ARCHETYPE_REGISTRY.items():
         try:
-            named.append((name, fn().to_mesh(boolean_union=False)))
+            named.append((name, fn().to_mesh(boolean_union=True)))
         except Exception as e:                       # pragma: no cover
             print(f"skip {name}: {e}")
     _grid(named, OUT / "archetypes.png", args.cols,
@@ -87,7 +87,7 @@ def main():
         cem_iterations=args.iterations, cem_samples=60))
     gen.train(verbose=False)
     objs = gen.generate(args.samples)
-    smp = [(f"{len(o.primitives)}p", o.to_mesh(boolean_union=False)) for o in objs]
+    smp = [(f"{len(o.primitives)}p", o.to_mesh(boolean_union=True)) for o in objs]
     _grid(smp, OUT / "v2_samples.png", min(args.cols, 8),
           f"v2 generated samples (max_primitives=8)")
 

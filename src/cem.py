@@ -24,7 +24,7 @@ from pathlib import Path
 from primitives import (
     CompositeObject, Primitive, Box, Cylinder, Sphere, Capsule,
     Cone, Pyramid, Torus, Ellipsoid, Wedge,
-    Transform, PrimitiveType, seat_height,
+    Transform, PrimitiveType, seat_height, half_extents,
 )
 from scoring import ObjectScorer, ScoreBreakdown, ScoringConfig
 
@@ -147,6 +147,15 @@ class ParameterDistribution:
     rotation_std: float = 0.3
     friction_mean: float = 0.8
     friction_std: float = 0.2
+    # v2 default: place each non-base primitive against a FACE of an existing
+    # one, axis-aligned (structured, "assembled"-looking objects). Set False for
+    # the v1 free random-offset placement.
+    structured_placement: bool = True
+    # Overlap fraction (of the smaller half-extent) when face-attaching, so the
+    # contact is a solid intersection rather than a tangential touch. Generous
+    # enough to stay robust to the approximate half_extents of asymmetric
+    # primitives (cone/pyramid/wedge).
+    attach_overlap: float = 0.4
 
     def __post_init__(self):
         if self.n_primitives_probs is None:
@@ -169,16 +178,18 @@ class ParameterDistribution:
         return int(rng.choice(len(self.n_primitives_probs), p=self.n_primitives_probs) + 1)
 
     def sample_primitive(self, rng: np.random.Generator, is_base: bool = False) -> Primitive:
-        """Sample one primitive of a CEM-chosen type with appropriate transform."""
+        """Sample one primitive of a CEM-chosen type. In structured mode the
+        transform is left at identity (placement is done by sample_object); in
+        legacy mode a random offset+rotation is applied here."""
         ti = int(rng.choice(len(PRIMITIVE_SPECS), p=self.primitive_type_probs))
         spec = PRIMITIVE_SPECS[ti]
         log_p = rng.normal(self.type_log_means[spec.key], self.type_log_stds[spec.key])
         params = np.clip(np.exp(log_p), spec.clamp_lo, spec.clamp_hi)
 
-        if is_base:
+        offset = np.zeros(3)
+        euler = np.zeros(3)
+        if is_base or self.structured_placement:
             transform = Transform.identity()
-            offset = np.zeros(3)
-            euler = np.zeros(3)
         else:
             offset = rng.normal(0.0, self.offset_std, size=3)
             euler = rng.normal(0.0, self.rotation_std, size=3)
@@ -187,27 +198,52 @@ class ParameterDistribution:
         prim = spec.build(params, transform)
         if is_base:
             prim.transform.translation[2] = seat_height(prim)
-        # Record the sampled placement so the CEM update can learn offset/rotation
-        # spread (these are not otherwise recoverable from the rotation matrix).
         prim._cem_offset = offset
         prim._cem_euler = euler
         return prim
 
+    def _attach(self, new: Primitive, anchor: Primitive, rng: np.random.Generator):
+        """Seat *new* against a face of *anchor*, axis-aligned, with overlap so
+        the union is a single solid. Any of the 6 faces — the whole object is
+        re-seated on the ground afterwards, so going below the anchor is fine."""
+        ha = half_extents(anchor)
+        hn = half_extents(new)
+        axis = int(rng.integers(0, 3))
+        sign = float(rng.choice([-1.0, 1.0]))
+        d = ha[axis] + hn[axis] - self.attach_overlap * min(ha[axis], hn[axis])
+        center = np.asarray(anchor.transform.translation, float).copy()
+        center[axis] += sign * d
+        new.transform.translation = center
+        new._cem_offset = center - np.asarray(anchor.transform.translation, float)
+
     def sample_object(self, rng: np.random.Generator,
                       name: str = "sampled_object") -> CompositeObject:
-        """Sample a composite object. Secondary primitives are attached to a
-        random existing primitive (chain/tree growth), biasing toward a single
-        connected body rather than scattering parts around the base only."""
+        """Sample a composite object. Each secondary primitive attaches to a
+        random existing primitive — by face contact (structured, default) or by
+        a random offset (legacy) — biasing toward a single connected body."""
         n_prims = self.sample_n_primitives(rng)
         base = self.sample_primitive(rng, is_base=True)
         primitives = [base]
 
-        for _ in range(1, n_prims):
-            prim = self.sample_primitive(rng, is_base=False)
-            anchor = primitives[int(rng.integers(0, len(primitives)))]
-            prim.transform.translation = prim.transform.translation + anchor.transform.translation
-            prim.transform.translation[2] = max(0.005, float(prim.transform.translation[2]))
-            primitives.append(prim)
+        if self.structured_placement:
+            base.transform.translation[2] = 0.0      # re-seated globally below
+            for _ in range(1, n_prims):
+                prim = self.sample_primitive(rng, is_base=False)
+                anchor = primitives[int(rng.integers(0, len(primitives)))]
+                self._attach(prim, anchor, rng)
+                primitives.append(prim)
+            # Shift the whole assembly so its lowest point rests on z=0.
+            low = min(float(p.transform.translation[2]) - float(half_extents(p)[2])
+                      for p in primitives)
+            for p in primitives:
+                p.transform.translation[2] -= low
+        else:
+            for _ in range(1, n_prims):
+                prim = self.sample_primitive(rng, is_base=False)
+                anchor = primitives[int(rng.integers(0, len(primitives)))]
+                prim.transform.translation = prim.transform.translation + anchor.transform.translation
+                prim.transform.translation[2] = max(0.005, float(prim.transform.translation[2]))
+                primitives.append(prim)
 
         friction = float(np.clip(rng.normal(self.friction_mean, self.friction_std), 0.1, 2.0))
         return CompositeObject(primitives=primitives, name=name, friction=friction)
@@ -225,6 +261,8 @@ class ParameterDistribution:
             'rotation_std': float(self.rotation_std),
             'friction_mean': float(self.friction_mean),
             'friction_std': float(self.friction_std),
+            'structured_placement': bool(self.structured_placement),
+            'attach_overlap': float(self.attach_overlap),
         }
 
     @classmethod
@@ -244,6 +282,8 @@ class ParameterDistribution:
         obj.rotation_std = float(d.get('rotation_std', obj.rotation_std))
         obj.friction_mean = float(d.get('friction_mean', obj.friction_mean))
         obj.friction_std = float(d.get('friction_std', obj.friction_std))
+        obj.structured_placement = bool(d.get('structured_placement', obj.structured_placement))
+        obj.attach_overlap = float(d.get('attach_overlap', obj.attach_overlap))
         return obj
 
 

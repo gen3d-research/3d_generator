@@ -47,6 +47,12 @@ class ExportConfig:
     # File formats
     mesh_format: str = "obj"  # "obj" or "stl"
 
+    # v2 default (True): export the watertight boolean-UNION as the visual /
+    # collision mesh instead of a raw concatenation of overlapping primitives
+    # (which leaves internal faces / self-intersections — bad topology in
+    # RViz/MoveIt). Falls back to concatenation if no CSG backend is available.
+    union_visual_mesh: bool = True
+
 
 class URDFExporter:
     """Exports CompositeObjects to URDF format with all required files."""
@@ -78,8 +84,10 @@ class URDFExporter:
         meshes_dir = output_dir / "meshes"
         meshes_dir.mkdir(exist_ok=True)
         
-        # Generate meshes
-        visual_mesh = obj.to_mesh(boolean_union=False)
+        # Generate meshes. The union (boolean_union=True) yields a clean
+        # watertight manifold; it falls back to concatenation if no CSG backend
+        # is installed. Set union_visual_mesh=False for the v1 concatenation.
+        visual_mesh = obj.to_mesh(boolean_union=self.config.union_visual_mesh)
         collision_mesh = self._prepare_collision_mesh(visual_mesh)
         
         # Compute physical properties

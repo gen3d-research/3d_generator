@@ -162,7 +162,9 @@ class Sphere(Primitive):
         object.__setattr__(self, 'ptype', PrimitiveType.SPHERE)
     
     def to_mesh(self) -> trimesh.Trimesh:
-        mesh = trimesh.creation.icosphere(radius=self.radius, subdivisions=2)
+        # subdivisions=3 keeps the mass/inertia faceting error < ~1% (was ~3-5%
+        # at subdivisions=2). See DISCREPANCIES / mesh-accuracy notes.
+        mesh = trimesh.creation.icosphere(radius=self.radius, subdivisions=3)
         mesh.apply_transform(self.transform.as_matrix())
         return mesh
     
@@ -229,7 +231,8 @@ class Cone(Primitive):
         object.__setattr__(self, 'ptype', PrimitiveType.CONE)
 
     def to_mesh(self) -> trimesh.Trimesh:
-        mesh = trimesh.creation.cone(radius=self.radius, height=self.height)
+        mesh = trimesh.creation.cone(radius=self.radius, height=self.height,
+                                     sections=32)
         # trimesh cone has its base at z=0; centroid is at h/4. Recenter.
         mesh.apply_translation([0.0, 0.0, -self.height / 4.0])
         mesh.apply_transform(self.transform.as_matrix())
@@ -303,7 +306,7 @@ class Ellipsoid(Primitive):
         self.radii = np.array(self.radii, dtype=float)
 
     def to_mesh(self) -> trimesh.Trimesh:
-        mesh = trimesh.creation.icosphere(radius=1.0, subdivisions=2)
+        mesh = trimesh.creation.icosphere(radius=1.0, subdivisions=3)
         mesh.apply_scale(self.radii.tolist())
         mesh.apply_transform(self.transform.as_matrix())
         return mesh
@@ -312,7 +315,13 @@ class Ellipsoid(Primitive):
         return (4.0 / 3.0) * np.pi * float(np.prod(self.radii))
 
     def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
-        return self._mesh_inertia(density)
+        """Exact solid-ellipsoid tensor: I = m/5 diag(b²+c², a²+c², a²+b²),
+        rotated into world axes (no faceting error)."""
+        m = self.volume() * density
+        a, b, c = self.radii
+        I_local = (m / 5.0) * np.diag([b * b + c * c, a * a + c * c, a * a + b * b])
+        R = self.transform.rotation
+        return R @ I_local @ R.T
 
 
 @dataclass
@@ -381,6 +390,35 @@ def seat_height(prim: Primitive) -> float:
         return float(prim.height / 3)        # triangle centroid at h/3
     # Fallback: derive from the mesh.
     return float(-prim.to_mesh().bounds[0][2])
+
+
+def half_extents(prim: Primitive) -> np.ndarray:
+    """Axis-aligned half-extents of a primitive in its LOCAL (unrotated) frame.
+
+    Used by the structured-placement sampler to seat one primitive against a
+    face of another. Approximate for cone/pyramid/wedge (treated symmetric),
+    which is fine for contact placement with an overlap margin.
+    """
+    if isinstance(prim, Box):
+        return np.asarray(prim.dimensions, float) / 2.0
+    if isinstance(prim, Cylinder):
+        return np.array([prim.radius, prim.radius, prim.height / 2.0])
+    if isinstance(prim, Sphere):
+        return np.array([prim.radius, prim.radius, prim.radius])
+    if isinstance(prim, Capsule):
+        h = prim.height / 2.0 + prim.radius
+        return np.array([prim.radius, prim.radius, h])
+    if isinstance(prim, (Cone, Pyramid)):
+        return np.array([prim.radius, prim.radius, prim.height / 2.0])
+    if isinstance(prim, Torus):
+        rr = prim.major_radius + prim.minor_radius
+        return np.array([rr, rr, prim.minor_radius])
+    if isinstance(prim, Ellipsoid):
+        return np.asarray(prim.radii, float)
+    if isinstance(prim, Wedge):
+        return np.array([prim.width / 2.0, prim.depth / 2.0, prim.height / 2.0])
+    he = (prim.to_mesh().bounds[1] - prim.to_mesh().bounds[0]) / 2.0
+    return np.asarray(he, float)
 
 
 @dataclass
@@ -494,6 +532,14 @@ class CompositeObject:
         Returns (mass, inertia_3x3_about_com, com). Raises if the union is not
         watertight (callers should fall back to the analytic path).
         """
+        # Single primitive: use its exact analytic tensor where one exists
+        # (box/cylinder/sphere/ellipsoid) — zero faceting error and no CSG.
+        if len(self.primitives) == 1:
+            p = self.primitives[0]
+            if isinstance(p, (Box, Cylinder, Sphere, Ellipsoid)):
+                mass = float(p.volume() * density)
+                return mass, p.inertia_tensor(density), np.asarray(p.transform.translation, float)
+
         mesh = self._strict_union()
         if mesh is None or len(mesh.vertices) == 0 or not mesh.is_watertight:
             raise ValueError("union mesh is not watertight; cannot integrate mass properties")
