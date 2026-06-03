@@ -51,6 +51,44 @@ The MoveIt launch file starts `robot_state_publisher` and
 planning-scene monitor receives `/joint_states` at startup — without those
 auxiliaries the monitor blocks waiting for an external robot driver.
 
+## Physical pick-and-place demo (the arm grasps spawned objects)
+
+The Panda physically picks objects that spawn in front of it, in gz_sim with
+`gz_ros2_control`. Each loop cycle spawns a different generated object on the
+table and runs the full pick: pre-grasp → grasp → close gripper →
+(DetachableJoint weld) → lift → transport → place → open → detach → retract.
+
+```bash
+# 1. Generated objects + grasp candidates, with the DetachableJoint + box
+#    collision patch the physical grasp needs.
+python3 3d_generator/scripts/build_eval_manifest.py \
+    --methods cem --top-k 6 --out 3d_generator/output/demo_manifest.json
+python3 3d_generator/scripts/patch_sdf_collision.py \
+    --manifest 3d_generator/output/demo_manifest.json
+
+# 2. Build + source.
+cd ros2_ws && colcon build --packages-select generated_objects_eval
+source install/setup.bash
+
+# 3. Run the demo: gz_sim (Panda + object) + RViz + MoveIt, looping picks.
+ros2 launch generated_objects_eval visual_demo.launch.py \
+    manifest:=$PWD/../3d_generator/output/demo_manifest.json \
+    method:=cem use_gz_control:=true loop:=true
+```
+
+`use_gz_control:=true` is what makes the arm move in physics (spawns the Panda
+with `gz_ros2_control` + `joint_state_broadcaster` + `panda_arm_controller` +
+`panda_hand_controller`, and the driver runs with `--execute`). Without it the
+launch is an RViz-only animation. Verified headless end-to-end (every stage
+plans and executes, gripper closes/opens, object welds/releases, successive
+distinct objects picked).
+
+Key requirements for the physical grasp to actually execute (all handled by the
+launch/driver now): plan from the **current** robot state, a loosened
+`trajectory_execution.allowed_start_tolerance` (0.1 rad), a controller-connection
+warm-up before the first `execute()`, and **absolute** SDF/mesh paths in the
+manifest so gz_sim can find the objects.
+
 ## Reproducing manuscript numbers
 
 To reproduce the headline numbers in the revised paper (Section V-D) use
