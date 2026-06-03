@@ -31,19 +31,31 @@ kill %1
 Each object is spawned ~5 cm above the 0.4 m table, settles for 2 s, and is
 counted stable iff final tilt < 25° and vertical drift < 5 cm.
 
-### Result (seed 42, 6 objects per method)
+### Multi-seed result (8 seeds × 5 objects/method, paper-grade)
 
-| method | spawned | stable | rate | typical tilt | typical drift | parts |
-|--------|--------:|-------:|-----:|-------------:|--------------:|------:|
-| v1 (paper_repro) | 6/6 | 6/6 | 100% | 0.0° | ~0.02 m | 1 |
-| v2 | 6/6 | 6/6 | 100% | 0.0° | ~0.005 m | 3 |
+Reproduce with `python scripts/sweep_sim_stability.py --seeds 8 --n 5`.
+
+| method | stable rate (mean ± 95% CI) | per-seed |
+|--------|----------------------------:|----------|
+| v1 (paper_repro) | **100.0% ± 0.0** | 100×8 |
+| v2 | **100.0% ± 0.0** | 100×8 |
+
+v2 − v1 mean diff = +0.0% (Wilcoxon n/a — identical). All 40 objects/method
+settled upright (tilt 0°, drift within the 5 cm / 25° tolerances) across every
+seed.
 
 **Takeaway:** the richer v2 objects (multi-part, mixed primitive types) are just
-as dynamically stable as v1's single primitives in real physics — the
-connectivity filter + ground-seating keep them upright. This complements the
-independent force-closure grasp metric (`grasp_planner.py`, see
-`scripts/verify_v2.py`), where v2 trades some single-object graspability for a
-large gain in shape diversity.
+as dynamically stable as v1's single primitives in real physics. This complements
+the independent force-closure grasp metric (`scripts/verify_v2.py`,
+`docs/results_v2.md`), where v2 trades a non-significant amount of single-object
+graspability for a significant gain in shape diversity.
+
+**Caveat (honest):** the settle test uses the **AABB-box collision** proxy
+(`patch_sdf_collision.py`), which over-approximates the true mesh and makes
+objects easy to keep upright — so "100% stable" mainly certifies that nothing
+explodes, sinks, or grossly topples, not fine-grained toppling of the exact
+shape. A mesh-collision (or convex-decomposition) stability test would be
+stricter future work.
 
 ## Grasp-execution test (MoveIt) — not run here
 
