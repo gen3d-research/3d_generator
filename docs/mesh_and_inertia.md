@@ -38,9 +38,10 @@ AABB box (`patch_sdf_collision.py`) as a coarse sim-contact proxy; density is a
 uniform 1000 kg/m³; structured-placement connectivity is ~85% at sample time
 (the `require_connected` filter keeps only connected objects at generation).
 
-## Caveat for the earlier sweep numbers
+## Sweep re-run for v2.1
 
-`docs/results_v2.md` was generated **before** structured placement (it used the
-free random-offset distribution). The independent metrics may shift under
-structured placement; re-run `scripts/sweep_v2.py` if paper-grade numbers are
-needed for the v2.1 generator.
+`docs/results_v2.md` has been re-run for the v2.1 structured-placement
+generator. Summary: suitability rose 0.88 → 0.94 (cleaner assemblies), parts
+≈ 3.0, the significant feature-diversity gain (p = 0.002) and graspability
+parity after re-rank (p = 0.56 vs v1) both hold; chamfer diversity is at best
+marginal. The v2.0 free-offset numbers are retained at the bottom of that file.
