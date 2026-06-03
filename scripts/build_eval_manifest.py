@@ -91,10 +91,12 @@ def main():
             manifest.append({
                 "name": obj.name,
                 "method": method,
-                "urdf": str(paths["urdf"]),
-                "sdf": str(paths["sdf"]),
-                "visual_mesh": str(paths["visual_mesh"]),
-                "collision_mesh": str(paths["collision_mesh"]),
+                # Absolute paths so gz_sim (launched from a different cwd) can
+                # find the SDF/meshes when the demo spawns the object.
+                "urdf": str(Path(paths["urdf"]).resolve()),
+                "sdf": str(Path(paths["sdf"]).resolve()),
+                "visual_mesh": str(Path(paths["visual_mesh"]).resolve()),
+                "collision_mesh": str(Path(paths["collision_mesh"]).resolve()),
                 "grasps": _serialise_grasps(report.grasps, args.n_grasps),
                 "n_grasps_synth": len(report.grasps),
             })

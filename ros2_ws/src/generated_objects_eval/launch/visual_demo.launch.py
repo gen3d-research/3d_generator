@@ -88,6 +88,14 @@ def _build_params_file(use_sim_time: bool = False) -> str:
     # launching process's ``-p use_sim_time:=...`` flag, so we have to
     # bake the clock domain into the params YAML under the /** wildcard.
     cfg["use_sim_time"] = use_sim_time
+    # Loosen the execution start-state tolerance. Even when the driver plans
+    # from the current state, the controller's reported state lags by a few
+    # millirad, and MoveIt's 0.01 rad default rejects every trajectory with
+    # "start point deviates from current robot state" — so the arm never moves
+    # in physics. 0.1 rad removes the spurious rejections.
+    cfg["trajectory_execution.allowed_start_tolerance"] = 0.1
+    if isinstance(cfg.get("trajectory_execution"), dict):
+        cfg["trajectory_execution"]["allowed_start_tolerance"] = 0.1
     params = {"/**": {"ros__parameters": cfg}}
     fd, path = tempfile.mkstemp(prefix="visual_demo_params_", suffix=".yaml")
     with os.fdopen(fd, "w") as f:

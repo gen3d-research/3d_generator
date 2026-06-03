@@ -412,8 +412,17 @@ class DemoNode(Node):
 
 # ---------------------------------------------------------------------------
 
-def plan_to_pose(arm, target: PoseStamped) -> Optional[object]:
-    arm.set_start_state(configuration_name="ready")
+def plan_to_pose(arm, target: PoseStamped, from_current: bool = True) -> Optional[object]:
+    # Plan from the robot's ACTUAL current state (not a fixed "ready" config),
+    # otherwise moveit_py.execute() rejects every trajectory with "start point
+    # deviates from current robot state" — the planned start (ready) never
+    # matches where gz_ros2_control actually has the arm. In RViz-only mode the
+    # current state comes from the driver's own /joint_states publisher; in
+    # gz_ros2_control mode it comes from joint_state_broadcaster.
+    if from_current:
+        arm.set_start_state_to_current_state()
+    else:
+        arm.set_start_state(configuration_name="ready")
     arm.set_goal_state(pose_stamped_msg=target, pose_link="panda_link8")
     result = arm.plan()
     if result and result.trajectory is not None:
@@ -669,6 +678,15 @@ def main():
     from moveit.planning import MoveItPy
     moveit_py = MoveItPy(node_name="demo_plan_driver")
     arm = moveit_py.get_planning_component("panda_arm")
+
+    # Warm-up: MoveIt's trajectory_execution_manager connects its
+    # FollowJointTrajectory action client lazily, so the very first execute()
+    # races the connection ("Action client not connected"). When executing in
+    # physics, give the client a few seconds to find panda_arm_controller
+    # before the first real pick stage.
+    if args.execute:
+        demo.get_logger().info("waiting for controller action clients to connect ...")
+        time.sleep(5.0)
 
     spawn_cfg = {"x": args.spawn_x, "y": args.spawn_y, "z": args.spawn_z}
     place_offset = (args.place_dx, args.place_dy, args.place_dz)
