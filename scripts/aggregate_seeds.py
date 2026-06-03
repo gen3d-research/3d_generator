@@ -17,6 +17,74 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 METHOD_ORDER = ["cem", "fixed_cad", "cmaes", "random_search", "ga"]
 
+# Metrics that are genuinely independent of the scorer CEM optimizes against.
+# Suitability ("score_mean") is deliberately excluded from significance testing.
+INDEPENDENT_METRICS = [
+    "grasp_success_rate", "feature_diversity", "chamfer_diversity",
+    "moveit_plan_any", "gazebo_stable",
+]
+
+
+def _t95_half_width(sem: float, n: int) -> float:
+    """Half-width of a two-sided 95% t confidence interval for the mean."""
+    if n < 2 or sem == 0.0:
+        return 0.0
+    try:
+        from scipy import stats
+        return float(stats.t.ppf(0.975, n - 1) * sem)
+    except Exception:
+        # Normal-approx fallback if scipy is unavailable.
+        return float(1.96 * sem)
+
+
+def _significance_vs_best(summary: dict) -> dict:
+    """Paired CEM-vs-best-alternative test per independent metric.
+
+    Uses the Wilcoxon signed-rank test when it is applicable (the
+    distribution-free choice for small paired samples) and falls back to a
+    paired t-test otherwise. With only a handful of seeds these tests are
+    badly underpowered — the result is reported with that caveat, not as a
+    licence to claim significance from n=3.
+    """
+    out = {}
+    if "cem" not in summary:
+        return out
+    for metric in INDEPENDENT_METRICS:
+        if metric not in summary["cem"]:
+            continue
+        cem_vals = np.asarray(summary["cem"][metric]["values"], dtype=float)
+        # pick the best non-cem method by mean on this metric
+        rivals = [(m, summary[m][metric]["mean"]) for m in summary
+                  if m != "cem" and metric in summary[m]]
+        if not rivals:
+            continue
+        best_m = max(rivals, key=lambda t: t[1])[0]
+        rival_vals = np.asarray(summary[best_m][metric]["values"], dtype=float)
+        if len(cem_vals) != len(rival_vals) or len(cem_vals) < 2:
+            out[metric] = {"vs": best_m, "test": "none",
+                           "p_value": None, "n": int(len(cem_vals)),
+                           "note": "too few paired samples"}
+            continue
+        diff = cem_vals - rival_vals
+        test, p = "none", None
+        try:
+            from scipy import stats
+            if np.allclose(diff, 0.0):
+                test, p = "degenerate", 1.0
+            else:
+                try:
+                    test, p = "wilcoxon", float(stats.wilcoxon(cem_vals, rival_vals).pvalue)
+                except Exception:
+                    test, p = "paired_t", float(stats.ttest_rel(cem_vals, rival_vals).pvalue)
+        except Exception:
+            pass
+        out[metric] = {
+            "vs": best_m, "test": test, "p_value": p, "n": int(len(cem_vals)),
+            "cem_mean": float(cem_vals.mean()), "rival_mean": float(rival_vals.mean()),
+            "note": "UNDERPOWERED at small n — interpret with caution",
+        }
+    return out
+
 
 def _moveit_per_method(blob):
     agg = defaultdict(lambda: {"n": 0, "any": 0, "succ": 0, "tot": 0})
@@ -83,13 +151,39 @@ def main():
 
     summary = {}
     for m, kvs in metrics_by_method.items():
-        summary[m] = {k: {"mean": float(np.mean(vs)),
-                          "std": float(np.std(vs, ddof=0)),
-                          "values": [float(x) for x in vs]}
-                      for k, vs in kvs.items()}
+        entry = {}
+        for k, vs in kvs.items():
+            arr = np.asarray(vs, dtype=float)
+            n = len(arr)
+            mean = float(arr.mean())
+            # NOTE: "std" keeps the original population std (ddof=0) so previously
+            # reported mean±std numbers reproduce exactly. The additive fields
+            # below (sample std, SEM, 95% CI) are the statistically appropriate
+            # ones for an n-seed comparison and should be used in new reporting.
+            std_pop = float(np.std(arr, ddof=0))
+            std_sample = float(np.std(arr, ddof=1)) if n > 1 else 0.0
+            sem = std_sample / np.sqrt(n) if n > 1 else 0.0
+            half = _t95_half_width(sem, n)
+            entry[k] = {
+                "mean": mean,
+                "std": std_pop,            # legacy (ddof=0) — do not change
+                "std_sample": std_sample,  # ddof=1
+                "sem": float(sem),
+                "ci95_lo": mean - half,
+                "ci95_hi": mean + half,
+                "n": n,
+                "values": [float(x) for x in arr],
+            }
+        summary[m] = entry
+
+    # Paired significance of CEM vs the best alternative on the INDEPENDENT
+    # metrics (suitability is excluded — CEM trains on that scorer). Reported
+    # alongside, not in place of, the descriptive table.
+    significance = _significance_vs_best(summary)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps({"seeds": args.seeds, "summary": summary},
+    args.out.write_text(json.dumps({"seeds": args.seeds, "summary": summary,
+                                    "significance": significance},
                                    indent=2))
 
     # markdown table
@@ -113,6 +207,35 @@ def main():
               f"{cell('moveit_plan_any')} | "
               f"{cell('gazebo_stable')} | "
               f"{cell('feature_diversity', pct=False)} |")
+
+    # additive: mean with 95% CI (statistically appropriate for n seeds)
+    print(f"\n## Multi-seed (n={len(args.seeds)}) — mean [95% CI]\n")
+    print("| Method | Grasp synth. | MoveIt 2 plan | Gazebo stable |")
+    print("|---|---|---|---|")
+    for m in METHOD_ORDER:
+        if m not in summary:
+            continue
+        s = summary[m]
+
+        def ci_cell(key):
+            if key not in s:
+                return "—"
+            e = s[key]
+            return f"{e['mean']*100:.1f}% [{e['ci95_lo']*100:.1f}, {e['ci95_hi']*100:.1f}]"
+
+        print(f"| {m} | {ci_cell('grasp_success_rate')} | "
+              f"{ci_cell('moveit_plan_any')} | {ci_cell('gazebo_stable')} |")
+
+    # additive: paired significance of CEM vs best alternative
+    if significance:
+        print("\n## CEM vs best alternative — paired test (independent metrics only)\n")
+        print("| Metric | vs | test | p-value | n | note |")
+        print("|---|---|---|---|---|---|")
+        for metric, info in significance.items():
+            p = info.get("p_value")
+            p_str = "n/a" if p is None else f"{p:.3f}"
+            print(f"| {metric} | {info.get('vs','—')} | {info.get('test','—')} | "
+                  f"{p_str} | {info.get('n','—')} | {info.get('note','')} |")
 
     print(f"\nSaved to {args.out}")
 

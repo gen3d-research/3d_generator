@@ -10,8 +10,17 @@ Baselines implemented:
     CMAESBaseline          - covariance matrix adaptation evolution strategy
     GABaseline             - simple (mu+lambda) genetic algorithm
 
-All baselines share the same parameter encoding used by ParameterDistribution
-so the comparison is apples-to-apples (R2-Q4, AE).
+CAVEAT ON ENCODING PARITY (see DISCREPANCIES.md, item 4):
+RandomSearch / CMAES / GA all search the SAME fixed 13-D, two-Box encoding
+(`decode`, below). FixedCAD instead perturbs the full archetype factories.
+"Ours" (cem.ParameterDistribution) searches a strictly richer space — 1-4
+primitives drawn from 4 types (box/cyl/sphere/capsule). So the optimizer
+comparison among RandomSearch/CMAES/GA is apples-to-apples, but Ours has a
+larger representation, which by itself inflates the diversity metric (the shape
+descriptor literally counts primitive types). Treat the Ours-vs-baseline
+diversity gap as confounded by representation, not purely optimizer quality.
+Set encoding="multitype" on the baselines (opt-in, default "twobox") to give the
+gradient-free baselines the full primitive-type palette with counts in {1..4}.
 """
 
 from __future__ import annotations
@@ -21,13 +30,10 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Callable, Optional
 
 from primitives import (
-    CompositeObject, Box, Cylinder, Sphere, Capsule, Transform,
-    create_simple_box, create_mug_like, create_l_shape,
-    create_dumbbell, create_hammer, create_bottle,
-    create_t_shape, create_u_shape, create_v_shape, create_monitor,
-    create_barbell, create_snowman, create_camera, create_frying_pan,
-    create_flashlight, create_spatula, create_remote, create_joystick,
+    CompositeObject, Box, Cylinder, Sphere, Capsule, Transform, seat_height,
 )
+from archetypes import ARCHETYPE_REGISTRY
+from cem import PRIMITIVE_SPECS
 from scoring import ObjectScorer, ScoringConfig
 
 
@@ -79,9 +85,89 @@ def decode(x: np.ndarray, name: str = "candidate") -> CompositeObject:
     return CompositeObject(primitives=[base, secondary], name=name, friction=friction)
 
 
-def sample_initial(rng: np.random.Generator, n: int) -> np.ndarray:
-    """Uniform sample of n points from the encoded box."""
-    return rng.uniform(ENC_LO, ENC_HI, size=(n, ENC_DIM))
+# ---------------------------------------------------------------------------
+# Optional "multitype" encoding (opt-in, for representation-parity studies).
+#
+# Fixed-dim vector with K primitive slots. Each slot carries a T-way type
+# selector (argmax over ALL registered primitive types), three log-size params
+# (the first len(spec.param_names) are used), and — for non-base slots — a
+# presence gate plus an offset and rotation. So the gradient-free baselines can
+# search the same type palette as Ours, with counts in {1..K}. The residual gap
+# to Ours (unbounded count) is documented in DISCREPANCIES.md item 4.
+# ---------------------------------------------------------------------------
+
+_T_TYPES = len(PRIMITIVE_SPECS)
+_MAX_PARAMS = 3
+_LOG_S_LO, _LOG_S_HI = np.log(0.005), np.log(0.14)
+_BASE_BLK = _T_TYPES + _MAX_PARAMS
+_SEC_BLK = _T_TYPES + _MAX_PARAMS + 1 + 3 + 3   # +presence +offset +rotation
+_MT_SLOTS = 4                                    # counts in {1..4}
+
+
+def _multitype_bounds(n_slots: int):
+    lo = [-1.0] * _T_TYPES + [_LOG_S_LO] * _MAX_PARAMS
+    hi = [1.0] * _T_TYPES + [_LOG_S_HI] * _MAX_PARAMS
+    for _ in range(n_slots - 1):
+        lo += ([-1.0] * _T_TYPES + [_LOG_S_LO] * _MAX_PARAMS
+               + [-1.0] + [-0.05, -0.05, 0.0] + [-np.pi / 2] * 3)
+        hi += ([1.0] * _T_TYPES + [_LOG_S_HI] * _MAX_PARAMS
+               + [1.0] + [0.05, 0.05, 0.10] + [np.pi / 2] * 3)
+    lo += [0.1]   # friction
+    hi += [2.0]
+    return np.array(lo), np.array(hi)
+
+
+ENC_MT_LO, ENC_MT_HI = _multitype_bounds(_MT_SLOTS)
+ENC_MT_MID = 0.5 * (ENC_MT_LO + ENC_MT_HI)
+ENC_MT_RANGE = ENC_MT_HI - ENC_MT_LO
+ENC_MT_DIM = len(ENC_MT_LO)
+
+
+def _build_typed(type_logits, size_logs, transform):
+    spec = PRIMITIVE_SPECS[int(np.argmax(type_logits))]
+    k = len(spec.param_names)
+    params = np.clip(np.exp(size_logs[:k]), spec.clamp_lo, spec.clamp_hi)
+    return spec.build(params, transform)
+
+
+def decode_multitype(x: np.ndarray, name: str = "candidate") -> CompositeObject:
+    """Decode the multitype vector into a 1..K-primitive CompositeObject."""
+    x = np.clip(x, ENC_MT_LO, ENC_MT_HI)
+    c = 0
+    base = _build_typed(x[c:c + _T_TYPES], x[c + _T_TYPES:c + _BASE_BLK],
+                        Transform.identity())
+    c += _BASE_BLK
+    base.transform.translation[2] = seat_height(base)
+    primitives = [base]
+    for _ in range(_MT_SLOTS - 1):
+        blk = x[c:c + _SEC_BLK]
+        c += _SEC_BLK
+        logits = blk[:_T_TYPES]
+        sizes = blk[_T_TYPES:_T_TYPES + _MAX_PARAMS]
+        gate = blk[_T_TYPES + _MAX_PARAMS]
+        off = blk[_T_TYPES + _MAX_PARAMS + 1:_T_TYPES + _MAX_PARAMS + 4]
+        rot = blk[_T_TYPES + _MAX_PARAMS + 4:_T_TYPES + _MAX_PARAMS + 7]
+        if gate > 0.0:
+            sec = _build_typed(logits, sizes, Transform.from_euler(off, rot))
+            sec.transform.translation = sec.transform.translation + base.transform.translation
+            sec.transform.translation[2] = max(0.01, float(sec.transform.translation[2]))
+            primitives.append(sec)
+    friction = float(x[c])
+    return CompositeObject(primitives=primitives, name=name, friction=friction)
+
+
+# Encoding registry: name -> (decode_fn, lo, hi, mid, range, dim)
+ENCODINGS = {
+    "twobox": (decode, ENC_LO, ENC_HI, ENC_MID, ENC_RANGE, ENC_DIM),
+    "multitype": (decode_multitype, ENC_MT_LO, ENC_MT_HI, ENC_MT_MID,
+                  ENC_MT_RANGE, ENC_MT_DIM),
+}
+
+
+def sample_initial(rng: np.random.Generator, n: int,
+                   lo: np.ndarray = ENC_LO, hi: np.ndarray = ENC_HI) -> np.ndarray:
+    """Uniform sample of n points from the encoded box (defaults to twobox)."""
+    return rng.uniform(lo, hi, size=(n, len(lo)))
 
 
 # ---------------------------------------------------------------------------
@@ -102,10 +188,16 @@ class _Baseline:
     """Shared bookkeeping; subclasses implement _step."""
 
     def __init__(self, budget: int, seed: int = 42,
-                 scoring_config: Optional[ScoringConfig] = None):
+                 scoring_config: Optional[ScoringConfig] = None,
+                 encoding: str = "twobox"):
         self.budget = budget
         self.rng = np.random.default_rng(seed)
         self.scorer = ObjectScorer(scoring_config)
+        if encoding not in ENCODINGS:
+            raise ValueError(f"Unknown encoding {encoding!r}; choose from {list(ENCODINGS)}")
+        self.encoding = encoding
+        (self._decode, self._lo, self._hi,
+         self._mid, self._range, self._dim) = ENCODINGS[encoding]
         self._best_score = -np.inf
         self._history_best: List[float] = []
         self._history_mean: List[float] = []
@@ -113,7 +205,7 @@ class _Baseline:
         self._all_scores: List[float] = []
 
     def _evaluate(self, x: np.ndarray, name: str = "cand") -> float:
-        obj = decode(x, name=name)
+        obj = self._decode(x, name=name)
         try:
             s = float(self.scorer.score(obj).total_score)
         except Exception:
@@ -127,7 +219,7 @@ class _Baseline:
     def _finalize(self, top_k: int, name: str) -> BaselineResult:
         scores = np.array(self._all_scores)
         order = np.argsort(scores)[::-1][:top_k]
-        objs = [decode(self._all_x[i], name=f"{name}_{rank:04d}")
+        objs = [self._decode(self._all_x[i], name=f"{name}_{rank:04d}")
                 for rank, i in enumerate(order)]
         return BaselineResult(
             objects=objs,
@@ -149,7 +241,7 @@ class RandomSearchBaseline(_Baseline):
     """Uniform sampling within the encoded box."""
 
     def run(self, top_k: int = 100) -> BaselineResult:
-        X = sample_initial(self.rng, self.budget)
+        X = sample_initial(self.rng, self.budget, self._lo, self._hi)
         gen_size = 50
         for start in range(0, self.budget, gen_size):
             batch = X[start:start + gen_size]
@@ -164,20 +256,9 @@ class RandomSearchBaseline(_Baseline):
 # Fixed-CAD baseline (no learning, samples from deterministic factories)
 # ---------------------------------------------------------------------------
 
-_FACTORY_FNS: List[Callable[[], CompositeObject]] = [
-    create_simple_box.__wrapped__ if hasattr(create_simple_box, "__wrapped__") else None,
-]
-# Build a list of zero-arg-callable factories that yield a CompositeObject.
-def _wrap_simple_box() -> CompositeObject:
-    return create_simple_box(np.array([0.05, 0.05, 0.06]))
-
-_FACTORY_FNS = [
-    _wrap_simple_box, create_mug_like, create_l_shape,
-    create_dumbbell, create_hammer, create_bottle,
-    create_t_shape, create_u_shape, create_v_shape, create_monitor,
-    create_barbell, create_snowman, create_camera, create_frying_pan,
-    create_flashlight, create_spatula, create_remote, create_joystick,
-]
+# The Fixed-CAD baseline cycles through every registered archetype (single
+# source of truth — adding an archetype to ARCHETYPE_REGISTRY includes it here).
+_FACTORY_FNS: List[Callable[[], CompositeObject]] = list(ARCHETYPE_REGISTRY.values())
 
 
 class FixedCADBaseline(_Baseline):
@@ -243,22 +324,21 @@ class CMAESBaseline(_Baseline):
 
     def __init__(self, budget: int, seed: int = 42,
                  scoring_config: Optional[ScoringConfig] = None,
-                 popsize: int = 16, sigma0: float = 0.5):
-        super().__init__(budget, seed, scoring_config)
+                 popsize: int = 16, sigma0: float = 0.5,
+                 encoding: str = "twobox"):
+        super().__init__(budget, seed, scoring_config, encoding=encoding)
         self.popsize = popsize
         self.sigma0 = sigma0
 
     def run(self, top_k: int = 100) -> BaselineResult:
         import cma
-        x0 = ENC_MID.copy()
         # Optimization is performed in a normalized cube; rescale before decoding.
-        scale = 0.5 * ENC_RANGE
-        offset = ENC_MID
+        scale = 0.5 * self._range
+        offset = self._mid
         es = cma.CMAEvolutionStrategy(
-            np.zeros(ENC_DIM), self.sigma0,
+            np.zeros(self._dim), self.sigma0,
             {"popsize": self.popsize, "seed": int(self.rng.integers(1, 2**31)),
-             "bounds": [(-1.0).repeat(ENC_DIM).tolist() if False else [-1.0] * ENC_DIM,
-                        [1.0] * ENC_DIM],
+             "bounds": [[-1.0] * self._dim, [1.0] * self._dim],
              "verbose": -9},
         )
         n_evals = 0
@@ -292,8 +372,9 @@ class GABaseline(_Baseline):
     def __init__(self, budget: int, seed: int = 42,
                  scoring_config: Optional[ScoringConfig] = None,
                  popsize: int = 30, mutation_std: float = 0.10,
-                 tournament_k: int = 3, crossover_p: float = 0.8):
-        super().__init__(budget, seed, scoring_config)
+                 tournament_k: int = 3, crossover_p: float = 0.8,
+                 encoding: str = "twobox"):
+        super().__init__(budget, seed, scoring_config, encoding=encoding)
         self.popsize = popsize
         self.mutation_std = mutation_std
         self.tournament_k = tournament_k
@@ -313,11 +394,11 @@ class GABaseline(_Baseline):
         return self.rng.uniform(lo, hi)
 
     def _mutate(self, x):
-        noise = self.rng.standard_normal(ENC_DIM) * self.mutation_std * ENC_RANGE
-        return np.clip(x + noise, ENC_LO, ENC_HI)
+        noise = self.rng.standard_normal(self._dim) * self.mutation_std * self._range
+        return np.clip(x + noise, self._lo, self._hi)
 
     def run(self, top_k: int = 100) -> BaselineResult:
-        pop_x = sample_initial(self.rng, self.popsize)
+        pop_x = sample_initial(self.rng, self.popsize, self._lo, self._hi)
         pop_s = np.array([self._evaluate(x, name=f"ga_{i:04d}") for i, x in enumerate(pop_x)])
         self._history_mean.extend([float(pop_s.mean())] * self.popsize)
         n_evals = self.popsize

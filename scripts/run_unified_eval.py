@@ -73,8 +73,9 @@ def _run_cem(budget, n_top, seed, iterations=None, n_samples=None):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--budget", type=int, default=600,
-                   help="Function evaluations per method")
+    p.add_argument("--budget", type=int, default=1500,
+                   help="Function evaluations per method (paper pipeline uses "
+                        "1500; run_multi_seed.sh passes this explicitly)")
     p.add_argument("--top-k", type=int, default=100,
                    help="Number of returned candidates per method")
     p.add_argument("--seed", type=int, default=42)

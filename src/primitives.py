@@ -18,6 +18,12 @@ class PrimitiveType(Enum):
     CYLINDER = "cylinder"
     CAPSULE = "capsule"
     SPHERE = "sphere"
+    # v2 additions — see archetypes/CEM spec table.
+    CONE = "cone"
+    PYRAMID = "pyramid"
+    TORUS = "torus"
+    ELLIPSOID = "ellipsoid"
+    WEDGE = "wedge"
 
 
 @dataclass
@@ -63,6 +69,20 @@ class Primitive:
     def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
         """Inertia tensor about centroid, assuming uniform density."""
         raise NotImplementedError
+
+    def _mesh_inertia(self, density: float = 1000.0) -> np.ndarray:
+        """Inertia about the primitive's centroid, in world orientation,
+        derived from its (transformed, watertight) mesh.
+
+        Used by primitive types whose analytic inertia tensor is error-prone
+        (cone, torus, wedge, …). The mesh is built centered on its centroid in
+        the local frame and then transformed, so ``moment_inertia`` is taken
+        about the world-space centroid — matching the contract of the analytic
+        ``inertia_tensor`` (about centroid, rotated into world axes).
+        """
+        m = self.to_mesh()
+        m.density = float(density)
+        return np.asarray(m.moment_inertia, dtype=float)
 
 
 @dataclass
@@ -192,6 +212,177 @@ class Capsule(Primitive):
         return R @ I_local @ R.T
 
 
+# ---------------------------------------------------------------------------
+# v2 primitive types. Each builds its mesh centered on its own centroid in the
+# local frame (so transform.translation == world centroid, matching the
+# analytic conventions in CompositeObject) and derives its inertia tensor from
+# the mesh via Primitive._mesh_inertia.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Cone(Primitive):
+    """Cone aligned with +Z (apex up), resting on its circular base."""
+    radius: float = 0.025
+    height: float = 0.06
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.CONE)
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        mesh = trimesh.creation.cone(radius=self.radius, height=self.height)
+        # trimesh cone has its base at z=0; centroid is at h/4. Recenter.
+        mesh.apply_translation([0.0, 0.0, -self.height / 4.0])
+        mesh.apply_transform(self.transform.as_matrix())
+        return mesh
+
+    def volume(self) -> float:
+        return (1.0 / 3.0) * np.pi * self.radius ** 2 * self.height
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+@dataclass
+class Pyramid(Primitive):
+    """Square-base pyramid aligned with +Z (apex up), resting on its base.
+
+    ``radius`` is the circumradius of the square base (built as a 4-section
+    cone), ``height`` the apex height.
+    """
+    radius: float = 0.03
+    height: float = 0.05
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.PYRAMID)
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        mesh = trimesh.creation.cone(radius=self.radius, height=self.height,
+                                     sections=4)
+        mesh.apply_translation([0.0, 0.0, -self.height / 4.0])
+        mesh.apply_transform(self.transform.as_matrix())
+        return mesh
+
+    def volume(self) -> float:
+        # square base inscribed in circle of radius r -> side r*sqrt(2),
+        # area 2 r^2; volume = (1/3) * base_area * h.
+        return (2.0 / 3.0) * self.radius ** 2 * self.height
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+@dataclass
+class Torus(Primitive):
+    """Torus lying in the XY plane (ring axis along Z)."""
+    major_radius: float = 0.04
+    minor_radius: float = 0.012
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.TORUS)
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        mesh = trimesh.creation.torus(major_radius=self.major_radius,
+                                      minor_radius=self.minor_radius)
+        mesh.apply_transform(self.transform.as_matrix())
+        return mesh
+
+    def volume(self) -> float:
+        return 2.0 * np.pi ** 2 * self.major_radius * self.minor_radius ** 2
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+@dataclass
+class Ellipsoid(Primitive):
+    """Ellipsoid with semi-axes (rx, ry, rz)."""
+    radii: np.ndarray = field(default_factory=lambda: np.array([0.04, 0.03, 0.02]))
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.ELLIPSOID)
+        self.radii = np.array(self.radii, dtype=float)
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        mesh = trimesh.creation.icosphere(radius=1.0, subdivisions=2)
+        mesh.apply_scale(self.radii.tolist())
+        mesh.apply_transform(self.transform.as_matrix())
+        return mesh
+
+    def volume(self) -> float:
+        return (4.0 / 3.0) * np.pi * float(np.prod(self.radii))
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+@dataclass
+class Wedge(Primitive):
+    """Isosceles triangular prism ("tent"/ramp), extruded along Y.
+
+    Cross-section is a triangle of base ``width`` (x) and ``height`` (z) with a
+    centered apex; extruded over ``depth`` (y). Centered on its centroid.
+    """
+    width: float = 0.05
+    depth: float = 0.04
+    height: float = 0.04
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.WEDGE)
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        w, d, h = self.width, self.depth, self.height
+        # Triangle in XZ: base from -w/2..w/2 at z=0, apex at (0, h); extrude
+        # along Y in [-d/2, d/2]. Triangle centroid z = h/3 -> recenter by it.
+        cz = h / 3.0
+        v = np.array([
+            [-w / 2, -d / 2, -cz], [w / 2, -d / 2, -cz], [0.0, -d / 2, h - cz],
+            [-w / 2,  d / 2, -cz], [w / 2,  d / 2, -cz], [0.0,  d / 2, h - cz],
+        ])
+        f = np.array([
+            [0, 2, 1], [3, 4, 5],            # the two triangular faces
+            [0, 1, 4], [0, 4, 3],            # bottom quad
+            [1, 2, 5], [1, 5, 4],            # right slope
+            [0, 3, 5], [0, 5, 2],            # left slope
+        ])
+        mesh = trimesh.Trimesh(vertices=v, faces=f, process=True)
+        mesh.fix_normals()
+        mesh.apply_transform(self.transform.as_matrix())
+        return mesh
+
+    def volume(self) -> float:
+        return 0.5 * self.width * self.height * self.depth
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+def seat_height(prim: Primitive) -> float:
+    """Distance from a primitive's centroid to its lowest point in its default
+    (unrotated) orientation — i.e. the z translation that rests it on z=0.
+
+    Single source of truth for ground-seating, used by the CEM sampler and the
+    baseline decoders.
+    """
+    if isinstance(prim, Box):
+        return float(prim.dimensions[2] / 2)
+    if isinstance(prim, Cylinder):
+        return float(prim.height / 2)
+    if isinstance(prim, Sphere):
+        return float(prim.radius)
+    if isinstance(prim, Capsule):
+        return float(prim.height / 2 + prim.radius)
+    if isinstance(prim, (Cone, Pyramid)):
+        return float(prim.height / 4)        # centroid at h/4 above the base
+    if isinstance(prim, Torus):
+        return float(prim.minor_radius)
+    if isinstance(prim, Ellipsoid):
+        return float(prim.radii[2])
+    if isinstance(prim, Wedge):
+        return float(prim.height / 3)        # triangle centroid at h/3
+    # Fallback: derive from the mesh.
+    return float(-prim.to_mesh().bounds[0][2])
+
+
 @dataclass
 class CompositeObject:
     """
@@ -216,12 +407,11 @@ class CompositeObject:
         meshes = [p.to_mesh() for p in self.primitives]
         
         if boolean_union and len(meshes) > 1:
-            # Try boolean union for clean mesh
+            # Try boolean union for a clean mesh, using whatever CSG backend
+            # trimesh finds (manifold3d or Blender). Falls back to concatenation
+            # if no backend is installed.
             try:
-                result = meshes[0]
-                for m in meshes[1:]:
-                    result = result.union(m, engine='blender')
-                return result
+                return trimesh.boolean.union(meshes)
             except Exception:
                 # Fall back to concatenation if boolean fails
                 pass
@@ -277,6 +467,63 @@ class CompositeObject:
         
         return total_mass, total_inertia
     
+    def _strict_union(self) -> trimesh.Trimesh:
+        """Boolean union that RAISES if no CSG backend is available.
+
+        Unlike ``to_mesh(boolean_union=True)`` (which silently falls back to
+        concatenation), this guarantees the result is a true union — required
+        for overlap-aware mass properties and connectivity. Needs a boolean
+        backend (``manifold3d`` — see requirements.txt — or Blender on PATH).
+        """
+        meshes = [p.to_mesh() for p in self.primitives]
+        if not meshes:
+            return trimesh.Trimesh()
+        if len(meshes) == 1:
+            return meshes[0]
+        return trimesh.boolean.union(meshes)
+
+    def mesh_mass_properties(self, density: float = 1000.0):
+        """Mass / COM / inertia from the *boolean-union* solid.
+
+        The analytic `center_of_mass` / `combined_inertia` sum per-primitive
+        volumes and so DOUBLE-COUNT any region where primitives overlap,
+        over-estimating mass and biasing the COM/inertia. This computes the
+        same quantities from the watertight union mesh, which is overlap-aware
+        and matches the geometry actually exported.
+
+        Returns (mass, inertia_3x3_about_com, com). Raises if the union is not
+        watertight (callers should fall back to the analytic path).
+        """
+        mesh = self._strict_union()
+        if mesh is None or len(mesh.vertices) == 0 or not mesh.is_watertight:
+            raise ValueError("union mesh is not watertight; cannot integrate mass properties")
+        mesh.density = float(density)
+        mass = float(mesh.mass)
+        com = np.asarray(mesh.center_mass, dtype=float)
+        inertia = np.asarray(mesh.moment_inertia, dtype=float)  # about COM, body frame
+        return mass, inertia, com
+
+    def n_connected_components(self) -> int:
+        """Number of spatially-connected solid bodies in the union.
+
+        Uses the boolean union so that overlapping primitives merge into one
+        body; physically separated (floating) primitives remain distinct. A
+        value > 1 means the object is not a single connected rigid body — which
+        is physically unrealizable as a single exported link.
+        """
+        try:
+            mesh = self._strict_union()
+            if mesh is None or len(mesh.vertices) == 0:
+                return 0
+            return int(mesh.body_count)
+        except Exception:
+            # If the union engine is unavailable, be permissive (treat as one).
+            return 1
+
+    def is_connected(self) -> bool:
+        """True if the object forms a single connected rigid body."""
+        return self.n_connected_components() <= 1
+
     def aabb(self) -> Tuple[np.ndarray, np.ndarray]:
         """Compute axis-aligned bounding box. Returns (min_corner, max_corner)."""
         mesh = self.to_mesh(boolean_union=False)
@@ -342,8 +589,9 @@ def create_mug_like(
         transform=Transform(translation=np.array([0, 0, body_height/2]))
     )
     
-    # Handle (small cylinder attached to side)
-    handle_offset = body_radius + handle_radius
+    # Handle (small cylinder attached to side). Offset chosen so the handle
+    # OVERLAPS the body (a single connected solid), not merely touches it.
+    handle_offset = body_radius
     handle = Cylinder(
         radius=handle_radius,
         height=handle_height,
@@ -425,10 +673,10 @@ def create_dumbbell(
         height=handle_length,
         transform=Transform(translation=np.array([0, 0, weight_radius + handle_length/2]))
     )
-    # Weight 2 on top of handle
+    # Weight 2 on top of handle (overlapping the handle top, not just touching)
     weight2 = Sphere(
         radius=weight_radius,
-        transform=Transform(translation=np.array([0, 0, weight_radius*2 + handle_length]))
+        transform=Transform(translation=np.array([0, 0, weight_radius + handle_length]))
     )
     
     return CompositeObject(primitives=[weight1, handle, weight2], name="dumbbell")

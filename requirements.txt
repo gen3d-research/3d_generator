@@ -3,6 +3,9 @@ numpy>=1.21.0
 scipy>=1.7.0
 trimesh>=3.10.0
 pyyaml>=6.0
+# Spatial index backend for trimesh proximity/contains queries used by the
+# force-closure grasp planner (grasp_planner.py) and the unified evaluation.
+rtree>=1.0.0
 
 # Visualisation (used by scripts/*.py for figure regeneration)
 matplotlib>=3.5.0
@@ -11,6 +14,14 @@ pillow>=9.0.0
 # Baseline used in Section VI (CMA-ES)
 cma>=4.0.0
 
-# For mesh boolean operations (optional but recommended)
-# manifold3d>=2.0.0  # or use blender backend
+# Boolean-union backend for trimesh. Required for the opt-in overlap-aware
+# inertia (ExportConfig.use_mesh_inertia) and the connectivity filter
+# (GeneratorConfig.require_connected); without a CSG backend those paths raise
+# and fall back to the analytic behavior. manifold3d is a pure wheel (no system
+# deps); Blender on PATH is an alternative. The default published pipeline does
+# not require it.
+manifold3d>=2.0.0
 # open3d>=0.15.0
+
+# Significance tests in scripts/aggregate_seeds.py use scipy.stats (scipy is
+# already a core dependency above).

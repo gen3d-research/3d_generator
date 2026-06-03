@@ -166,11 +166,16 @@ class ObjectScorer:
         2. COM projection onto ground plane
         3. Margin from COM to support polygon boundary
         """
-        # Find vertices near ground plane (z ≈ 0)
+        # Find vertices near the ground plane (z ≈ z_min). The tolerance scales
+        # with object height so that rounded/pointed bottoms (spheres, cones,
+        # ellipsoids) still yield a contact patch of >=3 vertices instead of
+        # being auto-scored 0 by a fixed 2 mm band (DISCREPANCIES.md item 5).
         vertices = mesh.vertices
         z_min = vertices[:, 2].min()
-        ground_thresh = z_min + 0.002  # 2mm tolerance
-        
+        z_max = vertices[:, 2].max()
+        extent_z = max(z_max - z_min, 1e-6)
+        ground_thresh = z_min + max(0.002, 0.03 * extent_z)
+
         ground_vertices = vertices[vertices[:, 2] < ground_thresh]
         
         if len(ground_vertices) < 3:

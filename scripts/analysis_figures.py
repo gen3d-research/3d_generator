@@ -79,24 +79,11 @@ METHOD_COLORS = {
 }
 CEM_HIGHLIGHT = "#1F77B4"
 
-# Archetype factories (matches run_scale_experiment.py).
-from primitives import (create_barbell, create_bottle, create_camera,  # noqa: E402
-                        create_dumbbell, create_flashlight, create_flat_box,
-                        create_frying_pan, create_hammer, create_joystick,
-                        create_l_shape, create_monitor, create_mug_like,
-                        create_remote, create_small_box, create_snowman,
-                        create_spatula, create_t_shape, create_tall_box,
-                        create_u_shape, create_v_shape)
+# Archetype factories (matches run_scale_experiment.py) — from the registry.
+from archetypes import ARCHETYPE_REGISTRY  # noqa: E402
 from archetype_cem import ArchetypeTrainer  # noqa: E402
 
-ARCHETYPE_FUNCS = [
-    create_small_box, create_tall_box, create_flat_box,
-    create_mug_like, create_l_shape, create_dumbbell, create_hammer,
-    create_bottle, create_t_shape, create_u_shape, create_v_shape,
-    create_monitor, create_barbell, create_snowman, create_camera,
-    create_frying_pan, create_flashlight, create_spatula, create_remote,
-    create_joystick,
-]
+ARCHETYPE_FUNCS = list(ARCHETYPE_REGISTRY.values())
 
 
 # ---------------------------------------------------------------------------

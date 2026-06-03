@@ -118,13 +118,18 @@ def plot_training_progress():
     # Tiny Sphere: 1mm radius
     # Box has too many antipodal pairs (faces). Sphere has few.
     # Few pairs * low distance score = Low Total Score.
-    dist.sphere_radius_mean = np.log(0.001)
-    dist.sphere_radius_std = 0.1
-    
-    # Force single primitive SPHERE (Type 2 is Sphere in scoring? No, check Enum)
-    # PrimitiveType: BOX=0, CYLINDER=1, SPHERE=2, CAPSULE=3
-    dist.n_primitives_probs = np.array([1.0, 0.0, 0.0, 0.0])
-    dist.primitive_type_probs = np.array([0.0, 0.0, 1.0, 0.0])
+    # v2 distribution API: per-type params live in spec-keyed dicts, and the
+    # probability vectors are length max_primitives / len(PRIMITIVE_SPECS).
+    from cem import PRIMITIVE_SPECS
+    dist.type_log_means['sphere'] = np.array([np.log(0.001)])
+    dist.type_log_stds['sphere'] = np.array([0.1])
+
+    # Force a single-primitive SPHERE object.
+    dist.n_primitives_probs = np.zeros(dist.max_primitives)
+    dist.n_primitives_probs[0] = 1.0
+    type_probs = np.zeros(len(PRIMITIVE_SPECS))
+    type_probs[[i for i, s in enumerate(PRIMITIVE_SPECS) if s.key == 'sphere'][0]] = 1.0
+    dist.primitive_type_probs = type_probs
     
     # Run training
     def print_progress(history):

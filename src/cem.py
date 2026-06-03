@@ -9,6 +9,10 @@ The CEM iteratively:
 2. Evaluates each candidate
 3. Selects top-k% (elite) samples
 4. Updates distribution parameters to maximize likelihood of elites
+
+v2: the distribution is driven by a primitive SPEC TABLE (PRIMITIVE_SPECS), so
+the set of primitive types and the maximum primitive count are configurable
+rather than hardcoded. See plan-to-make-all-* / DISCREPANCIES.md.
 """
 
 import numpy as np
@@ -19,213 +23,231 @@ from pathlib import Path
 
 from primitives import (
     CompositeObject, Primitive, Box, Cylinder, Sphere, Capsule,
-    Transform, PrimitiveType
+    Cone, Pyramid, Torus, Ellipsoid, Wedge,
+    Transform, PrimitiveType, seat_height,
 )
 from scoring import ObjectScorer, ScoreBreakdown, ScoringConfig
+
+
+# ---------------------------------------------------------------------------
+# Primitive spec table — single source of truth for the CEM's per-type
+# parameterization. Adding a new primitive type is a one-row addition here
+# (plus the Primitive subclass in primitives.py). All sampling / updating /
+# (de)serialization iterates this table, so nothing downstream hardcodes the
+# set of types or their parameter counts.
+#
+# All size params are sampled in LOG space (so they stay positive) and clamped
+# to [clamp_lo, clamp_hi] (linear, meters) after exponentiation.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PrimitiveSpec:
+    ptype: PrimitiveType
+    param_names: List[str]
+    init_log_mean: np.ndarray
+    init_std: np.ndarray
+    clamp_lo: np.ndarray
+    clamp_hi: np.ndarray
+    build: Callable                 # (linear_params: np.ndarray, Transform) -> Primitive
+    extract: Callable               # (Primitive) -> linear_params: np.ndarray
+
+    @property
+    def key(self) -> str:
+        return self.ptype.value
+
+
+def _log(*xs) -> np.ndarray:
+    return np.log(np.array(xs, dtype=float))
+
+
+PRIMITIVE_SPECS: List[PrimitiveSpec] = [
+    PrimitiveSpec(PrimitiveType.BOX, ['dx', 'dy', 'dz'],
+                  _log(0.05, 0.05, 0.06), np.array([0.4, 0.4, 0.4]),
+                  np.array([0.01, 0.01, 0.01]), np.array([0.15, 0.15, 0.15]),
+                  build=lambda p, t: Box(dimensions=p, transform=t),
+                  extract=lambda pr: np.asarray(pr.dimensions, dtype=float)),
+    PrimitiveSpec(PrimitiveType.CYLINDER, ['radius', 'height'],
+                  _log(0.025, 0.06), np.array([0.3, 0.4]),
+                  np.array([0.005, 0.01]), np.array([0.08, 0.15]),
+                  build=lambda p, t: Cylinder(radius=p[0], height=p[1], transform=t),
+                  extract=lambda pr: np.array([pr.radius, pr.height])),
+    PrimitiveSpec(PrimitiveType.SPHERE, ['radius'],
+                  _log(0.03), np.array([0.3]),
+                  np.array([0.01]), np.array([0.08]),
+                  build=lambda p, t: Sphere(radius=p[0], transform=t),
+                  extract=lambda pr: np.array([pr.radius])),
+    PrimitiveSpec(PrimitiveType.CAPSULE, ['radius', 'height'],
+                  _log(0.015, 0.04), np.array([0.3, 0.4]),
+                  np.array([0.005, 0.01]), np.array([0.05, 0.12]),
+                  build=lambda p, t: Capsule(radius=p[0], height=p[1], transform=t),
+                  extract=lambda pr: np.array([pr.radius, pr.height])),
+    PrimitiveSpec(PrimitiveType.CONE, ['radius', 'height'],
+                  _log(0.025, 0.06), np.array([0.3, 0.4]),
+                  np.array([0.008, 0.02]), np.array([0.07, 0.14]),
+                  build=lambda p, t: Cone(radius=p[0], height=p[1], transform=t),
+                  extract=lambda pr: np.array([pr.radius, pr.height])),
+    PrimitiveSpec(PrimitiveType.PYRAMID, ['radius', 'height'],
+                  _log(0.03, 0.05), np.array([0.3, 0.4]),
+                  np.array([0.01, 0.02]), np.array([0.08, 0.14]),
+                  build=lambda p, t: Pyramid(radius=p[0], height=p[1], transform=t),
+                  extract=lambda pr: np.array([pr.radius, pr.height])),
+    PrimitiveSpec(PrimitiveType.TORUS, ['major', 'minor'],
+                  _log(0.04, 0.012), np.array([0.3, 0.3]),
+                  np.array([0.025, 0.005]), np.array([0.08, 0.02]),
+                  build=lambda p, t: Torus(major_radius=p[0], minor_radius=p[1], transform=t),
+                  extract=lambda pr: np.array([pr.major_radius, pr.minor_radius])),
+    PrimitiveSpec(PrimitiveType.ELLIPSOID, ['rx', 'ry', 'rz'],
+                  _log(0.04, 0.03, 0.02), np.array([0.3, 0.3, 0.3]),
+                  np.array([0.01, 0.01, 0.01]), np.array([0.08, 0.08, 0.08]),
+                  build=lambda p, t: Ellipsoid(radii=p, transform=t),
+                  extract=lambda pr: np.asarray(pr.radii, dtype=float)),
+    PrimitiveSpec(PrimitiveType.WEDGE, ['width', 'depth', 'height'],
+                  _log(0.05, 0.04, 0.04), np.array([0.3, 0.3, 0.3]),
+                  np.array([0.015, 0.015, 0.015]), np.array([0.14, 0.14, 0.14]),
+                  build=lambda p, t: Wedge(width=p[0], depth=p[1], height=p[2], transform=t),
+                  extract=lambda pr: np.array([pr.width, pr.depth, pr.height])),
+]
+
+# Default type bias: favor box/cylinder slightly, rest uniform.
+_DEFAULT_TYPE_WEIGHTS = np.ones(len(PRIMITIVE_SPECS))
+_DEFAULT_TYPE_WEIGHTS[0] = 2.0   # box
+_DEFAULT_TYPE_WEIGHTS[1] = 1.5   # cylinder
+_SPEC_INDEX = {s.ptype: i for i, s in enumerate(PRIMITIVE_SPECS)}
+
+# Floors so learned spread never collapses to zero.
+_OFFSET_STD_FLOOR = 0.005
+_ROT_STD_FLOOR = 0.02
+
+
+def _default_n_primitives_probs(max_primitives: int) -> np.ndarray:
+    """Soft prior over primitive count favoring small objects, length = cap."""
+    head = np.array([0.3, 0.4, 0.2, 0.1])
+    if max_primitives <= 4:
+        w = head[:max_primitives]
+    else:
+        w = np.concatenate([head, np.full(max_primitives - 4, 0.02)])
+    return w / w.sum()
 
 
 @dataclass
 class ParameterDistribution:
     """
-    Factorized Gaussian distribution over object parameters.
-    
-    Parameters are stored in log-space for dimensions to ensure positivity.
-    Each parameter has a mean and standard deviation.
-    """
-    # Number of primitives (discrete, 1-4)
-    n_primitives_probs: np.ndarray = field(
-        default_factory=lambda: np.array([0.3, 0.4, 0.2, 0.1])  # P(1), P(2), P(3), P(4)
-    )
-    
-    # Primitive type probabilities
-    primitive_type_probs: np.ndarray = field(
-        default_factory=lambda: np.array([0.4, 0.35, 0.15, 0.1])  # box, cyl, sphere, capsule
-    )
-    
-    # Box dimensions (log-space): mean and std
-    box_dims_mean: np.ndarray = field(default_factory=lambda: np.log(np.array([0.05, 0.05, 0.06])))
-    box_dims_std: np.ndarray = field(default_factory=lambda: np.array([0.4, 0.4, 0.4]))
-    
-    # Cylinder parameters (log-space)
-    cyl_radius_mean: float = np.log(0.025)
-    cyl_radius_std: float = 0.3
-    cyl_height_mean: float = np.log(0.06)
-    cyl_height_std: float = 0.4
-    
-    # Sphere radius (log-space)
-    sphere_radius_mean: float = np.log(0.03)
-    sphere_radius_std: float = 0.3
-    
-    # Capsule parameters (log-space)
-    capsule_radius_mean: float = np.log(0.015)
-    capsule_radius_std: float = 0.3
-    capsule_height_mean: float = np.log(0.04)
-    capsule_height_std: float = 0.4
-    
-    # Position offsets for secondary primitives (linear space)
-    offset_std: float = 0.03  # Standard deviation for XYZ offsets
-    
-    # Rotation (euler angles, radians)
-    rotation_std: float = 0.3  # Std for rotation angles
+    Factorized distribution over composite-object parameters, driven by
+    PRIMITIVE_SPECS so the type set and primitive-count cap are configurable.
 
-    # Friction coefficient (LogUniform-ish via normal in log space? Or just trunc normal)
-    # Using normal distribution centered around common friction values
+    Size parameters per type are stored in LOG space (positivity). Placement
+    offsets/rotations are linear-space Gaussians. JSON-serializable.
+    """
+    max_primitives: int = 16
+    n_primitives_probs: Optional[np.ndarray] = None      # length == max_primitives
+    primitive_type_probs: Optional[np.ndarray] = None    # length == len(PRIMITIVE_SPECS)
+    type_log_means: Optional[Dict[str, np.ndarray]] = None
+    type_log_stds: Optional[Dict[str, np.ndarray]] = None
+    offset_std: float = 0.03
+    rotation_std: float = 0.3
     friction_mean: float = 0.8
     friction_std: float = 0.2
-    
-    def sample_n_primitives(self, rng: np.random.Generator) -> int:
-        """Sample number of primitives."""
-        return rng.choice(len(self.n_primitives_probs), p=self.n_primitives_probs) + 1
-    
-    def sample_primitive_type(self, rng: np.random.Generator) -> PrimitiveType:
-        """Sample primitive type."""
-        idx = rng.choice(len(self.primitive_type_probs), p=self.primitive_type_probs)
-        return [PrimitiveType.BOX, PrimitiveType.CYLINDER, 
-                PrimitiveType.SPHERE, PrimitiveType.CAPSULE][idx]
-    
-    def sample_box(self, rng: np.random.Generator, transform: Transform) -> Box:
-        """Sample a box primitive."""
-        log_dims = rng.normal(self.box_dims_mean, self.box_dims_std)
-        dims = np.exp(log_dims)
-        dims = np.clip(dims, 0.01, 0.15)  # Clamp to reasonable range
-        return Box(dimensions=dims, transform=transform)
-    
-    def sample_cylinder(self, rng: np.random.Generator, transform: Transform) -> Cylinder:
-        """Sample a cylinder primitive."""
-        log_r = rng.normal(self.cyl_radius_mean, self.cyl_radius_std)
-        log_h = rng.normal(self.cyl_height_mean, self.cyl_height_std)
-        return Cylinder(
-            radius=np.clip(np.exp(log_r), 0.005, 0.08),
-            height=np.clip(np.exp(log_h), 0.01, 0.15),
-            transform=transform
-        )
-    
-    def sample_sphere(self, rng: np.random.Generator, transform: Transform) -> Sphere:
-        """Sample a sphere primitive."""
-        log_r = rng.normal(self.sphere_radius_mean, self.sphere_radius_std)
-        return Sphere(
-            radius=np.clip(np.exp(log_r), 0.01, 0.08),
-            transform=transform
-        )
-    
-    def sample_capsule(self, rng: np.random.Generator, transform: Transform) -> Capsule:
-        """Sample a capsule primitive."""
-        log_r = rng.normal(self.capsule_radius_mean, self.capsule_radius_std)
-        log_h = rng.normal(self.capsule_height_mean, self.capsule_height_std)
-        return Capsule(
-            radius=np.clip(np.exp(log_r), 0.005, 0.05),
-            height=np.clip(np.exp(log_h), 0.01, 0.12),
-            transform=transform
-        )
-    
-    def sample_primitive(self, rng: np.random.Generator, 
-                         is_base: bool = False) -> Primitive:
-        """Sample a primitive with appropriate transform."""
-        ptype = self.sample_primitive_type(rng)
-        
-        if is_base:
-            # Base primitive sits on ground
-            # We'll set Z position after creating based on primitive height
-            transform = Transform.identity()
+
+    def __post_init__(self):
+        if self.n_primitives_probs is None:
+            self.n_primitives_probs = _default_n_primitives_probs(self.max_primitives)
         else:
-            # Secondary primitives have random offset and rotation
-            offset = rng.normal(0, self.offset_std, size=3)
-            euler = rng.normal(0, self.rotation_std, size=3)
+            self.n_primitives_probs = np.asarray(self.n_primitives_probs, dtype=float)
+        if self.primitive_type_probs is None:
+            self.primitive_type_probs = _DEFAULT_TYPE_WEIGHTS / _DEFAULT_TYPE_WEIGHTS.sum()
+        else:
+            self.primitive_type_probs = np.asarray(self.primitive_type_probs, dtype=float)
+        if self.type_log_means is None:
+            self.type_log_means = {s.key: s.init_log_mean.copy() for s in PRIMITIVE_SPECS}
+        if self.type_log_stds is None:
+            self.type_log_stds = {s.key: s.init_std.copy() for s in PRIMITIVE_SPECS}
+
+    # -- sampling -----------------------------------------------------------
+
+    def sample_n_primitives(self, rng: np.random.Generator) -> int:
+        """Sample number of primitives (1..len(n_primitives_probs))."""
+        return int(rng.choice(len(self.n_primitives_probs), p=self.n_primitives_probs) + 1)
+
+    def sample_primitive(self, rng: np.random.Generator, is_base: bool = False) -> Primitive:
+        """Sample one primitive of a CEM-chosen type with appropriate transform."""
+        ti = int(rng.choice(len(PRIMITIVE_SPECS), p=self.primitive_type_probs))
+        spec = PRIMITIVE_SPECS[ti]
+        log_p = rng.normal(self.type_log_means[spec.key], self.type_log_stds[spec.key])
+        params = np.clip(np.exp(log_p), spec.clamp_lo, spec.clamp_hi)
+
+        if is_base:
+            transform = Transform.identity()
+            offset = np.zeros(3)
+            euler = np.zeros(3)
+        else:
+            offset = rng.normal(0.0, self.offset_std, size=3)
+            euler = rng.normal(0.0, self.rotation_std, size=3)
             transform = Transform.from_euler(offset, euler)
-        
-        if ptype == PrimitiveType.BOX:
-            prim = self.sample_box(rng, transform)
-            if is_base:
-                # Adjust Z to sit on ground
-                prim.transform.translation[2] = prim.dimensions[2] / 2
-        elif ptype == PrimitiveType.CYLINDER:
-            prim = self.sample_cylinder(rng, transform)
-            if is_base:
-                prim.transform.translation[2] = prim.height / 2
-        elif ptype == PrimitiveType.SPHERE:
-            prim = self.sample_sphere(rng, transform)
-            if is_base:
-                prim.transform.translation[2] = prim.radius
-        else:  # CAPSULE
-            prim = self.sample_capsule(rng, transform)
-            if is_base:
-                prim.transform.translation[2] = prim.height / 2 + prim.radius
-        
+
+        prim = spec.build(params, transform)
+        if is_base:
+            prim.transform.translation[2] = seat_height(prim)
+        # Record the sampled placement so the CEM update can learn offset/rotation
+        # spread (these are not otherwise recoverable from the rotation matrix).
+        prim._cem_offset = offset
+        prim._cem_euler = euler
         return prim
-    
-    def sample_object(self, rng: np.random.Generator, 
+
+    def sample_object(self, rng: np.random.Generator,
                       name: str = "sampled_object") -> CompositeObject:
-        """Sample a complete composite object."""
+        """Sample a composite object. Secondary primitives are attached to a
+        random existing primitive (chain/tree growth), biasing toward a single
+        connected body rather than scattering parts around the base only."""
         n_prims = self.sample_n_primitives(rng)
-        primitives = []
-        
-        # First primitive is the base
         base = self.sample_primitive(rng, is_base=True)
-        primitives.append(base)
-        
-        # Additional primitives attach to base
-        for i in range(1, n_prims):
+        primitives = [base]
+
+        for _ in range(1, n_prims):
             prim = self.sample_primitive(rng, is_base=False)
-            # Offset relative to base centroid
-            prim.transform.translation += base.transform.translation
-            # Ensure it's above ground
-            prim.transform.translation[2] = max(0.01, prim.transform.translation[2])
+            anchor = primitives[int(rng.integers(0, len(primitives)))]
+            prim.transform.translation = prim.transform.translation + anchor.transform.translation
+            prim.transform.translation[2] = max(0.005, float(prim.transform.translation[2]))
             primitives.append(prim)
-        
-        # Sample friction
-        friction = np.clip(rng.normal(self.friction_mean, self.friction_std), 0.1, 2.0)
-        
+
+        friction = float(np.clip(rng.normal(self.friction_mean, self.friction_std), 0.1, 2.0))
         return CompositeObject(primitives=primitives, name=name, friction=friction)
-    
+
+    # -- serialization ------------------------------------------------------
+
     def to_dict(self) -> Dict:
-        """Serialize to dictionary."""
         return {
+            'max_primitives': int(self.max_primitives),
             'n_primitives_probs': self.n_primitives_probs.tolist(),
             'primitive_type_probs': self.primitive_type_probs.tolist(),
-            'box_dims_mean': self.box_dims_mean.tolist(),
-            'box_dims_std': self.box_dims_std.tolist(),
-            'cyl_radius_mean': float(self.cyl_radius_mean),
-            'cyl_radius_std': float(self.cyl_radius_std),
-            'cyl_height_mean': float(self.cyl_height_mean),
-            'cyl_height_std': float(self.cyl_height_std),
-            'sphere_radius_mean': float(self.sphere_radius_mean),
-            'sphere_radius_std': float(self.sphere_radius_std),
-            'capsule_radius_mean': float(self.capsule_radius_mean),
-            'capsule_radius_std': float(self.capsule_radius_std),
-            'capsule_height_mean': float(self.capsule_height_mean),
-            'capsule_height_std': float(self.capsule_height_std),
+            'type_log_means': {k: np.asarray(v).tolist() for k, v in self.type_log_means.items()},
+            'type_log_stds': {k: np.asarray(v).tolist() for k, v in self.type_log_stds.items()},
             'offset_std': float(self.offset_std),
             'rotation_std': float(self.rotation_std),
             'friction_mean': float(self.friction_mean),
-            'friction_std': float(self.friction_std)
+            'friction_std': float(self.friction_std),
         }
-    
+
     @classmethod
     def from_dict(cls, d: Dict) -> 'ParameterDistribution':
-        """Deserialize from dictionary."""
-        return cls(
-            n_primitives_probs=np.array(d['n_primitives_probs']),
-            primitive_type_probs=np.array(d['primitive_type_probs']),
-            box_dims_mean=np.array(d['box_dims_mean']),
-            box_dims_std=np.array(d['box_dims_std']),
-            cyl_radius_mean=d['cyl_radius_mean'],
-            cyl_radius_std=d['cyl_radius_std'],
-            cyl_height_mean=d['cyl_height_mean'],
-            cyl_height_std=d['cyl_height_std'],
-            sphere_radius_mean=d['sphere_radius_mean'],
-            sphere_radius_std=d['sphere_radius_std'],
-            capsule_radius_mean=d['capsule_radius_mean'],
-            capsule_radius_std=d['capsule_radius_std'],
-            capsule_height_mean=d['capsule_height_mean'],
-            capsule_height_std=d['capsule_height_std'],
-            offset_std=d['offset_std'],
-            rotation_std=d['rotation_std'],
-            friction_mean=d.get('friction_mean', 0.8),
-            friction_std=d.get('friction_std', 0.2)
-        )
+        """Deserialize. Tolerant of missing keys (and of legacy v1 dicts, which
+        simply fall back to the spec-table defaults for per-type params)."""
+        obj = cls(max_primitives=int(d.get('max_primitives', 16)))
+        if 'n_primitives_probs' in d:
+            obj.n_primitives_probs = np.array(d['n_primitives_probs'], dtype=float)
+        if 'primitive_type_probs' in d and len(d['primitive_type_probs']) == len(PRIMITIVE_SPECS):
+            obj.primitive_type_probs = np.array(d['primitive_type_probs'], dtype=float)
+        for k, v in (d.get('type_log_means') or {}).items():
+            obj.type_log_means[k] = np.array(v, dtype=float)
+        for k, v in (d.get('type_log_stds') or {}).items():
+            obj.type_log_stds[k] = np.array(v, dtype=float)
+        obj.offset_std = float(d.get('offset_std', obj.offset_std))
+        obj.rotation_std = float(d.get('rotation_std', obj.rotation_std))
+        obj.friction_mean = float(d.get('friction_mean', obj.friction_mean))
+        obj.friction_std = float(d.get('friction_std', obj.friction_std))
+        return obj
 
 
-@dataclass 
+@dataclass
 class CEMConfig:
     """Configuration for Cross-Entropy Method."""
     n_samples: int = 100          # Samples per iteration
@@ -239,71 +261,71 @@ class CEMConfig:
 class CEMOptimizer:
     """
     Cross-Entropy Method optimizer for object generation.
-    
+
     Iteratively improves the parameter distribution to generate
     objects with high manipulation scores.
     """
-    
+
     def __init__(self, config: CEMConfig = None, scoring_config: ScoringConfig = None,
                  initial_distribution: ParameterDistribution = None):
         self.config = config or CEMConfig()
         self.scorer = ObjectScorer(scoring_config)
         self.rng = np.random.default_rng(self.config.seed)
-        
+
         # Current distribution
         self.distribution = initial_distribution or ParameterDistribution()
-        
+
         # History for analysis
         self.history: List[Dict] = []
-    
-    def optimize(self, 
+
+    def optimize(self,
                  callback: Optional[Callable[[int, float, ParameterDistribution], None]] = None
                  ) -> ParameterDistribution:
         """
         Run CEM optimization.
-        
+
         Args:
-            callback: Optional function called each iteration with 
+            callback: Optional function called each iteration with
                      (iteration, mean_elite_score, current_distribution)
-        
+
         Returns:
             Optimized parameter distribution
         """
         n_elite = max(1, int(self.config.n_samples * self.config.elite_fraction))
-        
+
         for iteration in range(self.config.n_iterations):
             # Sample candidates
             candidates = []
             scores = []
             score_breakdowns = []
-            
+
             for i in range(self.config.n_samples):
                 obj = self.distribution.sample_object(
-                    self.rng, 
+                    self.rng,
                     name=f"iter{iteration}_sample{i}"
                 )
                 breakdown = self.scorer.score(obj)
-                
+
                 candidates.append(obj)
                 scores.append(breakdown.total_score)
                 score_breakdowns.append(breakdown)
-            
+
             scores = np.array(scores)
-            
+
             # Select elite samples
             elite_indices = np.argsort(scores)[-n_elite:]
             elite_scores = scores[elite_indices]
             elite_objects = [candidates[i] for i in elite_indices]
-            
+
             # Extract component scores for elites
             elite_breakdowns = [score_breakdowns[i] for i in elite_indices]
             elite_stability = [b.stability_score for b in elite_breakdowns]
             elite_graspability = [b.graspability_score for b in elite_breakdowns]
             elite_size = [b.size_score for b in elite_breakdowns]
-            
+
             # Update distribution based on elites
             self._update_distribution(elite_objects)
-            
+
             # Record history
             self.history.append({
                 'iteration': iteration,
@@ -315,107 +337,83 @@ class CEMOptimizer:
                 'mean_size': float(np.mean(elite_size)),
                 'std_score': float(np.std(scores))
             })
-            
+
             if callback:
                 callback(iteration, float(np.mean(elite_scores)), self.distribution)
-            
-            # Early stopping if converged
-            # if len(self.history) > 5:
-            #     recent_means = [h['mean_elite_score'] for h in self.history[-5:]]
-            #     if np.std(recent_means) < 0.01:
-            #         print(f"Converged at iteration {iteration}")
-            #         break
-        
+
         return self.distribution
-    
+
     def _update_distribution(self, elite_objects: List[CompositeObject]):
-        """Update distribution parameters based on elite samples."""
+        """Moment-match the distribution to the elite samples, generalized over
+        the primitive spec table and over learned placement spread."""
         if not elite_objects:
             return
-        
+
         lr = self.config.learning_rate
         min_std = self.config.min_std
-        
-        # Collect statistics from elite objects
-        n_prims_counts = np.zeros(4)
-        ptype_counts = np.zeros(4)
-        
-        box_dims_list = []
-        cyl_params_list = []
-        sphere_params_list = []
-        capsule_params_list = []
-        
+        dist = self.distribution
+        maxp = dist.max_primitives
+
+        n_prims_counts = np.zeros(maxp)
+        ptype_counts = np.zeros(len(PRIMITIVE_SPECS))
+        log_params: Dict[int, List[np.ndarray]] = {i: [] for i in range(len(PRIMITIVE_SPECS))}
+        offsets: List[np.ndarray] = []
+        eulers: List[np.ndarray] = []
+
         for obj in elite_objects:
-            n = min(len(obj.primitives), 4)
-            n_prims_counts[n - 1] += 1
-            
-            for prim in obj.primitives:
-                if isinstance(prim, Box):
-                    ptype_counts[0] += 1
-                    box_dims_list.append(np.log(prim.dimensions))
-                elif isinstance(prim, Cylinder):
-                    ptype_counts[1] += 1
-                    cyl_params_list.append([np.log(prim.radius), np.log(prim.height)])
-                elif isinstance(prim, Sphere):
-                    ptype_counts[2] += 1
-                    sphere_params_list.append(np.log(prim.radius))
-                elif isinstance(prim, Capsule):
-                    ptype_counts[3] += 1
-                    capsule_params_list.append([np.log(prim.radius), np.log(prim.height)])
-        
-        # Update n_primitives distribution
+            nn = min(len(obj.primitives), maxp)
+            n_prims_counts[nn - 1] += 1
+            for j, prim in enumerate(obj.primitives):
+                ti = _SPEC_INDEX.get(prim.ptype)
+                if ti is None:
+                    continue
+                spec = PRIMITIVE_SPECS[ti]
+                ptype_counts[ti] += 1
+                vals = np.clip(spec.extract(prim), spec.clamp_lo, spec.clamp_hi)
+                log_params[ti].append(np.log(vals))
+                if j > 0:
+                    off = getattr(prim, '_cem_offset', None)
+                    eu = getattr(prim, '_cem_euler', None)
+                    if off is not None:
+                        offsets.append(np.asarray(off, dtype=float))
+                    if eu is not None:
+                        eulers.append(np.asarray(eu, dtype=float))
+
+        # Number of primitives
         if n_prims_counts.sum() > 0:
             new_probs = n_prims_counts / n_prims_counts.sum()
-            self.distribution.n_primitives_probs = (
-                lr * new_probs + (1 - lr) * self.distribution.n_primitives_probs
-            )
-        
-        # Update primitive type distribution
+            dist.n_primitives_probs = lr * new_probs + (1 - lr) * dist.n_primitives_probs
+
+        # Primitive type probabilities (epsilon-smoothed to avoid zero mass)
         if ptype_counts.sum() > 0:
             new_probs = ptype_counts / ptype_counts.sum()
-            # Add small epsilon to avoid zero probabilities
             new_probs = (new_probs + 0.01) / (new_probs + 0.01).sum()
-            self.distribution.primitive_type_probs = (
-                lr * new_probs + (1 - lr) * self.distribution.primitive_type_probs
-            )
-        
-        # Update box parameters
-        if box_dims_list:
-            box_dims = np.array(box_dims_list)
-            new_mean = np.mean(box_dims, axis=0)
-            new_std = np.maximum(np.std(box_dims, axis=0), min_std)
-            self.distribution.box_dims_mean = lr * new_mean + (1 - lr) * self.distribution.box_dims_mean
-            self.distribution.box_dims_std = lr * new_std + (1 - lr) * self.distribution.box_dims_std
-        
-        # Update cylinder parameters
-        if cyl_params_list:
-            cyl_params = np.array(cyl_params_list)
-            self.distribution.cyl_radius_mean = lr * np.mean(cyl_params[:, 0]) + (1 - lr) * self.distribution.cyl_radius_mean
-            self.distribution.cyl_radius_std = max(min_std, lr * np.std(cyl_params[:, 0]) + (1 - lr) * self.distribution.cyl_radius_std)
-            self.distribution.cyl_height_mean = lr * np.mean(cyl_params[:, 1]) + (1 - lr) * self.distribution.cyl_height_mean
-            self.distribution.cyl_height_std = max(min_std, lr * np.std(cyl_params[:, 1]) + (1 - lr) * self.distribution.cyl_height_std)
-        
-        # Update sphere parameters
-        if sphere_params_list:
-            sphere_params = np.array(sphere_params_list)
-            self.distribution.sphere_radius_mean = lr * np.mean(sphere_params) + (1 - lr) * self.distribution.sphere_radius_mean
-            self.distribution.sphere_radius_std = max(min_std, lr * np.std(sphere_params) + (1 - lr) * self.distribution.sphere_radius_std)
-        
-        # Update capsule parameters
-        if capsule_params_list:
-            capsule_params = np.array(capsule_params_list)
-            self.distribution.capsule_radius_mean = lr * np.mean(capsule_params[:, 0]) + (1 - lr) * self.distribution.capsule_radius_mean
-            self.distribution.capsule_radius_std = max(min_std, lr * np.std(capsule_params[:, 0]) + (1 - lr) * self.distribution.capsule_radius_std)
-            self.distribution.capsule_height_mean = lr * np.mean(capsule_params[:, 1]) + (1 - lr) * self.distribution.capsule_height_mean
-            self.distribution.capsule_height_std = max(min_std, lr * np.std(capsule_params[:, 1]) + (1 - lr) * self.distribution.capsule_height_std)
+            dist.primitive_type_probs = lr * new_probs + (1 - lr) * dist.primitive_type_probs
 
-        # Update friction parameters
+        # Per-type size parameters (log-space)
+        for ti, spec in enumerate(PRIMITIVE_SPECS):
+            if log_params[ti]:
+                arr = np.array(log_params[ti])
+                new_mean = arr.mean(axis=0)
+                new_std = np.maximum(arr.std(axis=0), min_std)
+                dist.type_log_means[spec.key] = lr * new_mean + (1 - lr) * dist.type_log_means[spec.key]
+                dist.type_log_stds[spec.key] = lr * new_std + (1 - lr) * dist.type_log_stds[spec.key]
+
+        # Learned placement spread (offset / rotation)
+        if offsets:
+            new_off = float(np.std(np.array(offsets)))
+            dist.offset_std = max(_OFFSET_STD_FLOOR, lr * new_off + (1 - lr) * dist.offset_std)
+        if eulers:
+            new_rot = float(np.std(np.array(eulers)))
+            dist.rotation_std = max(_ROT_STD_FLOOR, lr * new_rot + (1 - lr) * dist.rotation_std)
+
+        # Friction
         frictions = [obj.friction for obj in elite_objects if hasattr(obj, 'friction')]
         if frictions:
-            friction_arr = np.array(frictions)
-            self.distribution.friction_mean = lr * np.mean(friction_arr) + (1 - lr) * self.distribution.friction_mean
-            self.distribution.friction_std = max(min_std, lr * np.std(friction_arr) + (1 - lr) * self.distribution.friction_std)
-    
+            fa = np.array(frictions)
+            dist.friction_mean = lr * float(np.mean(fa)) + (1 - lr) * dist.friction_mean
+            dist.friction_std = max(min_std, lr * float(np.std(fa)) + (1 - lr) * dist.friction_std)
+
     def save(self, path: Path):
         """Save optimizer state to file."""
         state = {
@@ -432,13 +430,13 @@ class CEMOptimizer:
         }
         with open(path, 'w') as f:
             json.dump(state, f, indent=2)
-    
+
     @classmethod
     def load(cls, path: Path) -> 'CEMOptimizer':
         """Load optimizer state from file."""
         with open(path, 'r') as f:
             state = json.load(f)
-        
+
         config = CEMConfig(**state['config'])
         optimizer = cls(config)
         optimizer.distribution = ParameterDistribution.from_dict(state['distribution'])
@@ -446,12 +444,12 @@ class CEMOptimizer:
         return optimizer
 
 
-def train_generator(n_iterations: int = 50, 
+def train_generator(n_iterations: int = 50,
                     n_samples: int = 100,
                     verbose: bool = True) -> CEMOptimizer:
     """
     Convenience function to train a generator from scratch.
-    
+
     Returns:
         Trained CEMOptimizer with optimized distribution
     """
@@ -459,13 +457,13 @@ def train_generator(n_iterations: int = 50,
         n_iterations=n_iterations,
         n_samples=n_samples
     )
-    
+
     optimizer = CEMOptimizer(config)
-    
+
     def progress_callback(iteration, mean_score, dist):
         if verbose:
             print(f"Iteration {iteration:3d}: mean elite score = {mean_score:.4f}")
-    
+
     optimizer.optimize(callback=progress_callback)
-    
+
     return optimizer

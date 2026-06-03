@@ -33,6 +33,13 @@ class ExportConfig:
     simplify_collision: bool = True
     max_collision_faces: int = 500
     use_convex_hull: bool = False     # Use convex hull for collision
+
+    # Inertia computation. v2 default (True) computes overlap-aware
+    # mass/COM/inertia from the boolean-union solid (correct for overlapping
+    # primitives; see DISCREPANCIES.md item 2), falling back to the analytic
+    # overlap-summing path if the union is not watertight or no CSG backend is
+    # available. Set False for the v1 paper-repro behavior.
+    use_mesh_inertia: bool = True
     
     # Visual appearance
     color_rgba: tuple = (0.7, 0.7, 0.7, 1.0)  # Default gray
@@ -76,8 +83,16 @@ class URDFExporter:
         collision_mesh = self._prepare_collision_mesh(visual_mesh)
         
         # Compute physical properties
-        mass, inertia = obj.combined_inertia(self.config.density)
-        com = obj.center_of_mass(self.config.density)
+        if self.config.use_mesh_inertia:
+            try:
+                mass, inertia, com = obj.mesh_mass_properties(self.config.density)
+            except Exception:
+                # Union not watertight — fall back to the analytic path.
+                mass, inertia = obj.combined_inertia(self.config.density)
+                com = obj.center_of_mass(self.config.density)
+        else:
+            mass, inertia = obj.combined_inertia(self.config.density)
+            com = obj.center_of_mass(self.config.density)
         
         # Save meshes
         ext = self.config.mesh_format

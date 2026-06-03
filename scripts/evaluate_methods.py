@@ -5,9 +5,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import os
 
-# Add 3d_generator to path
-# Use absolute path to ensure venv works correctly
-sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
+# Add 3d_generator/src to path (absolute, so it resolves regardless of cwd).
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 # Import relative if directly running from scripts/ doesn't work as expected with module layout

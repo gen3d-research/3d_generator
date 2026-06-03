@@ -31,6 +31,10 @@ class GeneratorConfig:
     cem_samples: int = 100
     elite_fraction: float = 0.2
     learning_rate: float = 0.7
+
+    # Maximum primitives per object (configurable; no hard cap). The CEM learns
+    # a distribution over counts 1..max_primitives.
+    max_primitives: int = 16
     
     # Scoring thresholds
     min_extent: float = 0.02
@@ -40,10 +44,20 @@ class GeneratorConfig:
     # Export settings
     density: float = 1000.0
     mesh_format: str = "obj"
+    use_mesh_inertia: bool = True     # overlap-aware inertia at export (v2 default)
     
     # Generation
     seed: int = 42
     min_score_threshold: float = 0.4  # Reject objects below this score
+    # v2 default (True): reject objects whose primitives are not a single
+    # connected body (floating parts). See DISCREPANCIES.md item 6. Set False
+    # for the v1 paper-repro behavior.
+    require_connected: bool = True
+    # v2 default (True): oversample candidates and keep the top-n by independent
+    # force-closure graspability (grasp_planner), decoupling final selection
+    # from the loose scorer proxy the CEM optimizes. See DISCREPANCIES.md item 8.
+    rerank_by_grasp: bool = True
+    rerank_oversample: int = 2        # candidate pool = rerank_oversample * n
 
 
 class RoboticObjectGenerator:
@@ -80,7 +94,7 @@ class RoboticObjectGenerator:
         self.scorer = ObjectScorer(self.scoring_config)
         
         # Distribution (can be trained)
-        self.distribution = ParameterDistribution()
+        self.distribution = ParameterDistribution(max_primitives=self.config.max_primitives)
         self.is_trained = False
         self.training_history = []
     
@@ -125,34 +139,46 @@ class RoboticObjectGenerator:
         
         return self.training_history
     
-    def generate(self, 
+    def generate(self,
                  n: int = 1,
                  ensure_quality: bool = True,
                  max_attempts_per_object: int = 10) -> List[CompositeObject]:
         """
         Generate n objects from the current distribution.
-        
+
+        When ``rerank_by_grasp`` is set (v2 default) a larger candidate pool is
+        produced and the top-n by independent force-closure graspability are
+        kept — so final selection does not depend solely on the scorer proxy
+        the CEM optimizes against.
+
         Args:
             n: Number of objects to generate
             ensure_quality: If True, reject objects below score threshold
             max_attempts_per_object: Max sampling attempts per object
-        
+
         Returns:
             List of CompositeObjects
         """
+        pool_n = n
+        if ensure_quality and self.config.rerank_by_grasp and n >= 1:
+            pool_n = max(n, n * int(self.config.rerank_oversample))
+
         objects = []
-        
-        for i in range(n):
+        for i in range(pool_n):
             for attempt in range(max_attempts_per_object):
                 obj = self.distribution.sample_object(
-                    self.rng, 
+                    self.rng,
                     name=f"generated_{i:04d}"
                 )
-                
+
                 if not ensure_quality:
                     objects.append(obj)
                     break
-                
+
+                # Connectivity gate (v2 default on): reject floating parts.
+                if self.config.require_connected and not obj.is_connected():
+                    continue
+
                 # Check quality
                 score = self.scorer.score(obj)
                 if score.total_score >= self.config.min_score_threshold:
@@ -161,6 +187,20 @@ class RoboticObjectGenerator:
             else:
                 # All attempts failed, use last one anyway
                 objects.append(obj)
+
+        # Re-rank the oversampled pool by independent force-closure graspability
+        # and keep the best n (renaming to a stable generated_#### sequence).
+        if ensure_quality and self.config.rerank_by_grasp and len(objects) > n:
+            from grasp_planner import plan_grasps
+            def _grasp_key(o):
+                try:
+                    r = plan_grasps(o, n_surface=128, max_pairs=600, seed=self.config.seed)
+                    return (r.n_collision_free, r.n_friction_pass)
+                except Exception:
+                    return (0, 0)
+            objects = sorted(objects, key=_grasp_key, reverse=True)[:n]
+            for i, o in enumerate(objects):
+                o.name = f"generated_{i:04d}"
         
         return objects
     
@@ -202,7 +242,8 @@ class RoboticObjectGenerator:
         """
         export_config = ExportConfig(
             density=self.config.density,
-            mesh_format=self.config.mesh_format
+            mesh_format=self.config.mesh_format,
+            use_mesh_inertia=self.config.use_mesh_inertia
         )
         
         exporter = BatchExporter(export_config)
@@ -287,146 +328,46 @@ def generate_and_export(n: int,
     return gen.export_all(objects, output_dir)
 
 
+def paper_repro_generator(seed: int = 42) -> 'RoboticObjectGenerator':
+    """Build a generator configured to reproduce the v1 (ICARM-paper) behavior
+    from the v2 code: 4 primitives max, only the original 4 primitive types,
+    analytic (overlap-summing) inertia, and no connectivity / grasp-rerank
+    post-processing. See DISCREPANCIES.md. (v1 is also preserved on the
+    legacy/v1-icarm git branch.)"""
+    from cem import PRIMITIVE_SPECS
+    config = GeneratorConfig(
+        max_primitives=4,
+        use_mesh_inertia=False,
+        require_connected=False,
+        rerank_by_grasp=False,
+        seed=seed,
+    )
+    gen = RoboticObjectGenerator(config)
+    # Restrict to the original box/cyl/sphere/capsule palette and v1 count prior.
+    type_probs = np.zeros(len(PRIMITIVE_SPECS))
+    type_probs[:4] = [0.4, 0.35, 0.15, 0.1]
+    gen.distribution.primitive_type_probs = type_probs
+    gen.distribution.n_primitives_probs = np.array([0.3, 0.4, 0.2, 0.1])
+    return gen
+
+
 def create_archetype_set(output_dir: str) -> Dict[str, Path]:
     """
-    Create a small set of archetype objects for testing.
-    
-    Returns common manipulation object types:
-    - Simple boxes (various sizes)
-    - Cylinders
-    - Mug-like objects
-    - L-shapes
+    Export every archetype in the central registry (archetypes.ARCHETYPE_REGISTRY)
+    to URDF/SDF. Adding an archetype to the registry automatically includes it
+    here — there is no per-shape list to maintain.
     """
     from export import URDFExporter
-    
+    from archetypes import ARCHETYPE_REGISTRY
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     exporter = URDFExporter()
-    results = {}
-    
-    # Small box
-    obj = create_simple_box(np.array([0.04, 0.04, 0.04]))
-    obj.name = "small_box"
-    paths = exporter.export(obj, output_dir / "small_box", "small_box")
-    results['small_box'] = paths['urdf']
-    
-    # Tall box
-    obj = create_simple_box(np.array([0.03, 0.03, 0.10]))
-    obj.name = "tall_box"
-    paths = exporter.export(obj, output_dir / "tall_box", "tall_box")
-    results['tall_box'] = paths['urdf']
-    
-    # Flat box
-    obj = create_simple_box(np.array([0.08, 0.06, 0.02]))
-    obj.name = "flat_box"
-    paths = exporter.export(obj, output_dir / "flat_box", "flat_box")
-    results['flat_box'] = paths['urdf']
-    
-    # Mug-like
-    obj = create_mug_like()
-    obj.name = "mug"
-    paths = exporter.export(obj, output_dir / "mug", "mug")
-    results['mug'] = paths['urdf']
-    
-    # L-shape
-    obj = create_l_shape()
-    obj.name = "l_shape"
-    paths = exporter.export(obj, output_dir / "l_shape", "l_shape")
-    results['l_shape'] = paths['urdf']
-    
-    # Dumbbell
-    obj = create_dumbbell()
-    obj.name = "dumbbell"
-    paths = exporter.export(obj, output_dir / "dumbbell", "dumbbell")
-    results['dumbbell'] = paths['urdf']
-
-    # Hammer
-    obj = create_hammer()
-    obj.name = "hammer"
-    paths = exporter.export(obj, output_dir / "hammer", "hammer")
-    results['hammer'] = paths['urdf']
-    
-    # Bottle
-    obj = create_bottle()
-    obj.name = "bottle"
-    paths = exporter.export(obj, output_dir / "bottle", "bottle")
-    results['bottle'] = paths['urdf']
-    
-    # ---------------------------
-    # New Archetypes (9-20)
-    # ---------------------------
-    
-    # T-shape
-    obj = create_t_shape()
-    obj.name = "t_shape"
-    paths = exporter.export(obj, output_dir / "t_shape", "t_shape")
-    results['t_shape'] = paths['urdf']
-    
-    # U-shape
-    obj = create_u_shape()
-    obj.name = "u_shape"
-    paths = exporter.export(obj, output_dir / "u_shape", "u_shape")
-    results['u_shape'] = paths['urdf']
-    
-    # V-shape
-    obj = create_v_shape()
-    obj.name = "v_shape"
-    paths = exporter.export(obj, output_dir / "v_shape", "v_shape")
-    results['v_shape'] = paths['urdf']
-    
-    # Monitor
-    obj = create_monitor()
-    obj.name = "monitor"
-    paths = exporter.export(obj, output_dir / "monitor", "monitor")
-    results['monitor'] = paths['urdf']
-    
-    # Barbell
-    obj = create_barbell()
-    obj.name = "barbell"
-    paths = exporter.export(obj, output_dir / "barbell", "barbell")
-    results['barbell'] = paths['urdf']
-    
-    # Snowman
-    obj = create_snowman()
-    obj.name = "snowman"
-    paths = exporter.export(obj, output_dir / "snowman", "snowman")
-    results['snowman'] = paths['urdf']
-    
-    # Camera
-    obj = create_camera()
-    obj.name = "camera"
-    paths = exporter.export(obj, output_dir / "camera", "camera")
-    results['camera'] = paths['urdf']
-    
-    # Frying Pan
-    obj = create_frying_pan()
-    obj.name = "frying_pan"
-    paths = exporter.export(obj, output_dir / "frying_pan", "frying_pan")
-    results['frying_pan'] = paths['urdf']
-    
-    # Flashlight
-    obj = create_flashlight()
-    obj.name = "flashlight"
-    paths = exporter.export(obj, output_dir / "flashlight", "flashlight")
-    results['flashlight'] = paths['urdf']
-    
-    # Spatula
-    obj = create_spatula()
-    obj.name = "spatula"
-    paths = exporter.export(obj, output_dir / "spatula", "spatula")
-    results['spatula'] = paths['urdf']
-    
-    # Remote
-    obj = create_remote()
-    obj.name = "remote"
-    paths = exporter.export(obj, output_dir / "remote", "remote")
-    results['remote'] = paths['urdf']
-    
-    # Joystick
-    obj = create_joystick()
-    obj.name = "joystick"
-    paths = exporter.export(obj, output_dir / "joystick", "joystick")
-    results['joystick'] = paths['urdf']
-
+    results: Dict[str, Path] = {}
+    for name, factory in ARCHETYPE_REGISTRY.items():
+        obj = factory()
+        obj.name = name
+        paths = exporter.export(obj, output_dir / name, name)
+        results[name] = paths['urdf']
     return results
