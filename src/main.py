@@ -101,6 +101,7 @@ def cmd_score(args):
     print(f"  Graspability:{breakdown.graspability_score:.4f}")
     print(f"  Complexity:  {breakdown.complexity_score:.4f}")
     print(f"  Validity:    {breakdown.validity_score:.4f}")
+    print(f"  Assembly:    {breakdown.assembly_score:.4f}")
     print(f"  ─────────────────────")
     print(f"  TOTAL:       {breakdown.total_score:.4f}")
     print(f"\nDiagnostics:")

@@ -14,8 +14,12 @@
 > - **Item 6 (floating parts):** now rejected by default (`require_connected=True`),
 >   and sampling is connected-by-construction.
 > - **Item 7 (learned placement):** the CEM now learns `offset_std`/`rotation_std`.
-> - **Item 8 (grasp proxy):** generation now re-ranks by the independent planner
->   (`rerank_by_grasp=True`).
+> - **Item 8 (grasp proxy / single-primitive collapse):** the scorer now adds an
+>   **assembly reward** (`ScoringConfig.assembly_weight`, saturating at
+>   `target_primitives`) so the trained CEM produces multi-part composites
+>   instead of collapsing to a lone box; generation also re-ranks by the
+>   independent force-closure planner (`rerank_by_grasp=True`). With
+>   `assembly_weight=0` the v1 total score is recovered exactly.
 > - **Item 4 (encoding parity):** baselines gained a `multitype` encoding over all
 >   types with counts {1..4}.
 > - **Item 3 (stability COM source):** still analytic COM in the CEM hot path

@@ -39,9 +39,17 @@ class ScoringConfig:
     # Mesh complexity
     max_triangles: int = 5000
     min_thickness: float = 0.005  # 5mm minimum feature thickness
-    
+
     # Density for physics
     density: float = 1000.0  # kg/m³ (like water/plastic)
+
+    # Assembly / multi-part utility (v2). Rewards composite objects built from
+    # several connected primitives so the CEM does not collapse to trivial
+    # single-primitive shapes (the scorer otherwise saturates at 1.0 for a lone
+    # box — DISCREPANCIES.md item 8). Reward saturates at ``target_primitives``.
+    # Set ``assembly_weight = 0.0`` to recover the v1 (paper) scoring exactly.
+    target_primitives: int = 3
+    assembly_weight: float = 1.0
 
 
 @dataclass
@@ -52,15 +60,17 @@ class ScoreBreakdown:
     graspability_score: float = 0.0
     complexity_score: float = 0.0
     validity_score: float = 0.0
+    assembly_score: float = 0.0
     total_score: float = 0.0
-    
+
     # Diagnostic info
     aabb_extents: np.ndarray = None
     stability_margin: float = 0.0
     n_antipodal_pairs: int = 0
     n_triangles: int = 0
+    n_primitives: int = 0
     is_watertight: bool = False
-    
+
     def to_dict(self) -> Dict:
         return {
             'size_score': self.size_score,
@@ -68,11 +78,13 @@ class ScoreBreakdown:
             'graspability_score': self.graspability_score,
             'complexity_score': self.complexity_score,
             'validity_score': self.validity_score,
+            'assembly_score': self.assembly_score,
             'total_score': self.total_score,
             'aabb_extents': self.aabb_extents.tolist() if self.aabb_extents is not None else None,
             'stability_margin': self.stability_margin,
             'n_antipodal_pairs': self.n_antipodal_pairs,
             'n_triangles': self.n_triangles,
+            'n_primitives': self.n_primitives,
             'is_watertight': self.is_watertight
         }
 
@@ -109,26 +121,32 @@ class ObjectScorer:
         result.graspability_score, result.n_antipodal_pairs = self._score_graspability(mesh)
         result.complexity_score, result.n_triangles = self._score_complexity(mesh)
         result.validity_score, result.is_watertight = self._score_validity(mesh)
-        
-        # Weighted combination
-        # Weights chosen to prioritize: validity > stability > graspability > size > complexity
+        result.assembly_score, result.n_primitives = self._score_assembly(obj)
+
+        # Weighted combination.
+        # Priority: validity > stability > graspability > size > {assembly} > complexity.
+        # 'assembly' rewards multi-part composites (v2). Its weight is
+        # configurable; setting it to 0 reproduces the v1 (paper) total exactly,
+        # because then it drops out of both numerator and denominator.
         weights = {
             'validity': 2.0,
             'stability': 1.5,
             'graspability': 1.5,
             'size': 1.0,
-            'complexity': 0.5
+            'assembly': float(self.config.assembly_weight),
+            'complexity': 0.5,
         }
-        
+
         total_weight = sum(weights.values())
         result.total_score = (
             weights['validity'] * result.validity_score +
             weights['stability'] * result.stability_score +
             weights['graspability'] * result.graspability_score +
             weights['size'] * result.size_score +
+            weights['assembly'] * result.assembly_score +
             weights['complexity'] * result.complexity_score
         ) / total_weight
-        
+
         return result
     
     def _score_size(self, obj: CompositeObject) -> Tuple[float, np.ndarray]:
@@ -366,6 +384,24 @@ class ObjectScorer:
             pass
         
         return score, is_watertight
+
+    def _score_assembly(self, obj: CompositeObject) -> Tuple[float, int]:
+        """
+        Reward multi-part assembly (v2).
+
+        A saturating function of the primitive count: 0 for a single primitive,
+        rising linearly to 1.0 at ``target_primitives`` and staying there. This
+        is deliberately cheap (no mesh/boolean ops) so it adds no cost to the
+        CEM inner loop, and it gives the optimizer a gradient toward richer
+        composites instead of collapsing to a lone box. Degenerate stacks are
+        still held in check by the stability / graspability / validity terms
+        (computed on the real mesh) and by the connectivity filter at
+        generation time.
+        """
+        n = len(obj.primitives)
+        target = max(2, int(self.config.target_primitives))
+        score = float(np.clip((n - 1) / (target - 1), 0.0, 1.0))
+        return score, n
 
 
 def quick_score(obj: CompositeObject, config: ScoringConfig = None) -> float:

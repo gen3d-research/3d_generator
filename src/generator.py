@@ -40,6 +40,11 @@ class GeneratorConfig:
     min_extent: float = 0.02
     max_extent: float = 0.15
     gripper_width_max: float = 0.08
+    # Assembly reward (v2): nudges the CEM toward multi-part composites instead
+    # of single primitives. Saturates at target_primitives. assembly_weight=0
+    # reproduces v1 scoring. See DISCREPANCIES.md item 8.
+    assembly_weight: float = 1.0
+    target_primitives: int = 3
     
     # Export settings
     density: float = 1000.0
@@ -89,7 +94,9 @@ class RoboticObjectGenerator:
             min_extent=self.config.min_extent,
             max_extent=self.config.max_extent,
             gripper_width_max=self.config.gripper_width_max,
-            density=self.config.density
+            density=self.config.density,
+            assembly_weight=self.config.assembly_weight,
+            target_primitives=self.config.target_primitives
         )
         self.scorer = ObjectScorer(self.scoring_config)
         
@@ -340,6 +347,7 @@ def paper_repro_generator(seed: int = 42) -> 'RoboticObjectGenerator':
         use_mesh_inertia=False,
         require_connected=False,
         rerank_by_grasp=False,
+        assembly_weight=0.0,       # v1 scoring had no assembly reward
         seed=seed,
     )
     gen = RoboticObjectGenerator(config)
