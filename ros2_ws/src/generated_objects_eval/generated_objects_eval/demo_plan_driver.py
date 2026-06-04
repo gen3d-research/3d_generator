@@ -39,7 +39,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import JointState
 from shape_msgs.msg import SolidPrimitive
-from std_msgs.msg import ColorRGBA, Header
+from std_msgs.msg import ColorRGBA, Header, Float64MultiArray
 from visualization_msgs.msg import Marker, MarkerArray
 
 WORLD_NAME = "panda_eval_world"
@@ -216,6 +216,22 @@ class DemoNode(Node):
         # the way to 0 (missed it).
         self._finger_pos = None
         self.create_subscription(JointState, "/joint_states", self._js_cb, 10)
+
+        # Finger EFFORT command (forward_command_controller): [f1, f2].
+        # Negative = close/squeeze, positive = open. The ForwardCommandController
+        # holds the last command, so a single close publish keeps squeezing
+        # through lift/transport -> genuine friction hold.
+        self._finger_cmd = self.create_publisher(
+            Float64MultiArray, "/panda_hand_controller/commands", 10)
+        # Closing squeeze force (N); friction holds the object. ~-50 is the
+        # sweet spot: enough to hold without ejecting smaller objects (higher,
+        # e.g. -75, slams light objects out of the gripper). The ideal force is
+        # object-dependent — the inherent reality of friction grasping.
+        self.close_eff = -50.0
+        self.open_eff = 20.0
+
+    def set_finger_effort(self, eff: float):
+        self._finger_cmd.publish(Float64MultiArray(data=[float(eff), float(eff)]))
 
     def _js_cb(self, msg):
         if "panda_finger_joint1" in msg.name:
@@ -663,7 +679,7 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
             f"margin={g.get('margin', 0.0):.3f})")
 
         if execute:
-            demo.send_gripper_goal(demo.hand_open, max_effort=20.0)
+            demo.set_finger_effort(demo.open_eff)
         if not _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis):
             continue
         if not _move(demo, arm, grasp, approach, execute, moveit_py, "grasp", axis=axis):
@@ -678,7 +694,7 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
         z_before = None
         if execute:
             z_before = query_object_z(name)
-            demo.send_gripper_goal(demo.hand_closed, max_effort=80.0)
+            demo.set_finger_effort(demo.close_eff)
             time.sleep(1.2)   # let the contact forces build up
             # Diagnostic: finger opening after squeeze. >~0.003 means the fingers
             # stalled on the object (contact made); ~0 means they closed through
@@ -699,7 +715,7 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
                 demo.get_logger().warn(
                     f"     lift check SLIPPED (friction grasp did not hold): "
                     f"z {z_before:.3f} -> {z_after:.3f}; next candidate")
-                demo.send_gripper_goal(demo.hand_open, max_effort=20.0)
+                demo.set_finger_effort(demo.open_eff)
                 continue
             demo.get_logger().info(
                 f"     lift check GRASPED (held by friction): z {z_before} -> {z_after}")
@@ -710,7 +726,7 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
     if not picked:
         demo.get_logger().warn(f"  {name}: no successful grasp in {n_try} tries")
         if execute:
-            demo.send_gripper_goal(demo.hand_open, max_effort=20.0)
+            demo.set_finger_effort(demo.open_eff)
         return False
 
     # ---- place the (physically held) object, then release it ----
@@ -726,7 +742,7 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
     # (genuine physics — the RViz marker, tracked from the real pose, follows).
     demo.get_logger().info("  -> open (release)")
     if execute:
-        demo.send_gripper_goal(demo.hand_open, max_effort=20.0)
+        demo.set_finger_effort(demo.open_eff)
         time.sleep(0.8)
     _move(demo, arm, retract, approach, execute, moveit_py, "retract", axis=axis)
     return True
