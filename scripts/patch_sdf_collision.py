@@ -52,7 +52,11 @@ _DETACHABLE_PLUGIN_TPL = """  <plugin filename="gz-sim-detachable-joint-system"
           name="gz::sim::systems::DetachableJoint">
     <parent_link>{name}_link</parent_link>
     <child_model>panda</child_model>
-    <child_link>panda_hand</child_link>
+    <!-- panda_hand / panda_link8 carry no <inertial> in the MoveIt panda
+         description, so urdf2sdf DROPS them and they do not exist in the gz
+         model. Attach to panda_leftfinger, which survives and moves with the
+         gripper. (Was panda_hand -> the joint silently never formed.) -->
+    <child_link>panda_leftfinger</child_link>
     <detach_topic>/{name}/detach</detach_topic>
     <attach_topic>/{name}/attach</attach_topic>
     <output_topic>/{name}/state</output_topic>

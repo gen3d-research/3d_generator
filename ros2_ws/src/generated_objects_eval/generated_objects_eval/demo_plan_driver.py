@@ -565,7 +565,7 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
             demo.send_gripper_goal(demo.hand_closed, max_effort=40.0)
             z_before = query_object_z(name)
             gz_topic_publish(f"/{name}/attach")
-            demo.get_logger().info(f"     attach {name} -> panda_hand (z0={z_before})")
+            demo.get_logger().info(f"     attach {name} -> panda_leftfinger (z0={z_before})")
         time.sleep(0.5)
 
         demo.publish_object(pose_xyz([0.0, 0.0, 0.05]), extents,
