@@ -33,9 +33,10 @@ polyhedra): sphere/ellipsoid were ~−3.4% volume / ~−5.6% inertia at
    instead of randomly offset blobs. Legacy free-offset placement remains
    available (and is what `paper_repro_generator` uses).
 
-Remaining notes (not bugs): the Gazebo SDF collision is still replaced by an
-AABB box (`patch_sdf_collision.py`) as a coarse sim-contact proxy; density is a
-uniform 1000 kg/m³; structured-placement connectivity is ~85% at sample time
+Remaining notes (not bugs): the Gazebo SDF collision is now the exported **mesh**
+(export writes vertex normals so DART accepts it; objects rest flush on the
+table — `patch_sdf_collision.py` only bumps friction + injects the grasp plugin);
+density is a uniform 1000 kg/m³; structured-placement connectivity is ~85% at sample time
 (the `require_connected` filter keeps only connected objects at generation).
 
 ## Sweep re-run for v2.1

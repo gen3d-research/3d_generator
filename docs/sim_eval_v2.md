@@ -12,8 +12,9 @@ Pipeline:
 # 1) Train v1 (paper_repro) + v2 generators, export objects, write a manifest.
 python scripts/run_sim_eval_v2.py build --n 6 --out output/sim_eval
 
-# 2) Swap the trimesh collision OBJs (no vertex normals -> DART rejects them)
-#    for AABB-box collisions (the repo's standard fix).
+# 2) Bump collision friction + inject the DetachableJoint plugin. (Collision is
+#    now the exported MESH — export writes vertex normals so DART accepts it —
+#    so objects rest flush; the old AABB-box workaround is gone.)
 python scripts/patch_sdf_collision.py --manifest output/sim_eval/manifest.json
 
 # 3) Launch the world headless and run the settle test in one shell so the
@@ -50,12 +51,11 @@ the independent force-closure grasp metric (`scripts/verify_v2.py`,
 `docs/results_v2.md`), where v2 trades a non-significant amount of single-object
 graspability for a significant gain in shape diversity.
 
-**Caveat (honest):** the settle test uses the **AABB-box collision** proxy
-(`patch_sdf_collision.py`), which over-approximates the true mesh and makes
-objects easy to keep upright — so "100% stable" mainly certifies that nothing
-explodes, sinks, or grossly topples, not fine-grained toppling of the exact
-shape. A mesh-collision (or convex-decomposition) stability test would be
-stricter future work.
+**Note on collision fidelity:** the 100% numbers above were measured with the
+old AABB-box collision (over-approximate, very stable). `patch_sdf_collision.py`
+now keeps the exact **mesh collision** (export writes vertex normals so DART
+accepts it), which is a stricter, faithful test — re-run
+`scripts/sweep_sim_stability.py` to refresh the numbers under mesh collision.
 
 ## Grasp-execution test (MoveIt) — not run here
 
