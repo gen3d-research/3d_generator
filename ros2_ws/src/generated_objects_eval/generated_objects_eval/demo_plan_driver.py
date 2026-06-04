@@ -211,6 +211,16 @@ class DemoNode(Node):
         self._track = None  # (name, mesh_url, extents) or None
         threading.Thread(target=self._track_loop, daemon=True).start()
 
+        # Track the live finger opening (from the broadcaster) so we can tell
+        # whether the fingers stalled against the object (contact) or closed all
+        # the way to 0 (missed it).
+        self._finger_pos = None
+        self.create_subscription(JointState, "/joint_states", self._js_cb, 10)
+
+    def _js_cb(self, msg):
+        if "panda_finger_joint1" in msg.name:
+            self._finger_pos = float(msg.position[msg.name.index("panda_finger_joint1")])
+
     def track_object(self, name, mesh_url, extents):
         self._track = (name, mesh_url, np.asarray(extents, dtype=float))
 
@@ -670,6 +680,12 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
             z_before = query_object_z(name)
             demo.send_gripper_goal(demo.hand_closed, max_effort=80.0)
             time.sleep(1.2)   # let the contact forces build up
+            # Diagnostic: finger opening after squeeze. >~0.003 means the fingers
+            # stalled on the object (contact made); ~0 means they closed through
+            # empty space (missed it).
+            demo.get_logger().info(
+                f"     finger opening after squeeze = {demo._finger_pos} "
+                f"(0=closed, 0.04=open)")
 
         # Lift slowly so the object's inertia doesn't break the friction grip.
         _move(demo, arm, lift, approach, execute, moveit_py, "lift", min_s=3.5, axis=axis)

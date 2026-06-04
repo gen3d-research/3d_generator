@@ -67,14 +67,25 @@
   </joint>
 
   <joint name="panda_finger_joint1">
-    <command_interface name="position"/>
+    <!-- Firm position PID so closing against the object applies a real squeeze
+         force (up to the 150 N effort limit) -> genuine friction grasp that
+         actually holds, instead of a soft touch the object slips out of. -->
+    <command_interface name="position">
+      <param name="p">1500.0</param>
+      <param name="i">0.0</param>
+      <param name="d">5.0</param>
+    </command_interface>
     <state_interface name="position">
       <param name="initial_value">0.035</param>
     </state_interface>
     <state_interface name="velocity"/>
   </joint>
   <joint name="panda_finger_joint2">
-    <command_interface name="position"/>
+    <command_interface name="position">
+      <param name="p">1500.0</param>
+      <param name="i">0.0</param>
+      <param name="d">5.0</param>
+    </command_interface>
     <state_interface name="position">
       <param name="initial_value">0.035</param>
     </state_interface>
