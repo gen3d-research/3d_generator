@@ -86,8 +86,13 @@ distinct objects picked).
 Key requirements for the physical grasp to actually execute (all handled by the
 launch/driver now): plan from the **current** robot state, a loosened
 `trajectory_execution.allowed_start_tolerance` (0.1 rad), a controller-connection
-warm-up before the first `execute()`, and **absolute** SDF/mesh paths in the
-manifest so gz_sim can find the objects.
+warm-up before the first `execute()`, **absolute** SDF/mesh paths in the manifest
+so gz_sim can find the objects, the driver not publishing `/joint_states` in
+execute mode (the broadcaster owns it), and — critically — the grasp
+DetachableJoint welds the object to **`panda_leftfinger`**, not `panda_hand`:
+`panda_hand`/`panda_link8` have no `<inertial>` so urdf2sdf drops them and they
+don't exist in the spawned gz model, so a `panda_hand` weld silently never
+forms. Verified: object z rises ~+0.1 m on lift ("lift check GRASPED").
 
 ## Reproducing manuscript numbers
 
