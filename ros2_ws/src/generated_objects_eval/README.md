@@ -54,13 +54,15 @@ auxiliaries the monitor blocks waiting for an external robot driver.
 ## Physical pick-and-place demo (the arm grasps spawned objects)
 
 The Panda physically picks objects that spawn in front of it, in gz_sim with
-`gz_ros2_control`. Each loop cycle spawns a different generated object on the
-table and runs the full pick: pre-grasp → grasp → close gripper →
-(DetachableJoint weld) → lift → transport → place → open → detach → retract.
+`gz_ros2_control`. The grasp is **genuine** — the fingers squeeze the object with
+a constant force and hold it by **friction** (no weld/cheat). Each loop cycle
+spawns a different generated object on the table and runs the full pick:
+pre-grasp → grasp → close (squeeze) → lift → transport → place → release →
+retract. A closed-loop **lift check** confirms the object actually rose; if the
+friction grasp slips, the driver opens and retries the next ranked candidate.
 
 ```bash
-# 1. Generated objects + grasp candidates, with the DetachableJoint + box
-#    collision patch the physical grasp needs.
+# 1. Generated objects + grasp candidates (mesh collision + firm friction).
 python3 3d_generator/scripts/build_eval_manifest.py \
     --methods cem --top-k 6 --out 3d_generator/output/demo_manifest.json
 python3 3d_generator/scripts/patch_sdf_collision.py \
@@ -79,20 +81,34 @@ ros2 launch generated_objects_eval visual_demo.launch.py \
 `use_gz_control:=true` is what makes the arm move in physics (spawns the Panda
 with `gz_ros2_control` + `joint_state_broadcaster` + `panda_arm_controller` +
 `panda_hand_controller`, and the driver runs with `--execute`). Without it the
-launch is an RViz-only animation. Verified headless end-to-end (every stage
-plans and executes, gripper closes/opens, object welds/releases, successive
-distinct objects picked).
+launch is an RViz-only animation. Verified headless end-to-end: the gripper
+gently stalls on the object and "lift check GRASPED (held by friction):
+z 0.40 -> 0.51" — it rises ~11 cm and completes the full pick→place→release with
+no weld.
 
-Key requirements for the physical grasp to actually execute (all handled by the
-launch/driver now): plan from the **current** robot state, a loosened
-`trajectory_execution.allowed_start_tolerance` (0.1 rad), a controller-connection
-warm-up before the first `execute()`, **absolute** SDF/mesh paths in the manifest
-so gz_sim can find the objects, the driver not publishing `/joint_states` in
-execute mode (the broadcaster owns it), and — critically — the grasp
-DetachableJoint welds the object to **`panda_leftfinger`**, not `panda_hand`:
-`panda_hand`/`panda_link8` have no `<inertial>` so urdf2sdf drops them and they
-don't exist in the spawned gz model, so a `panda_hand` weld silently never
-forms. Verified: object z rises ~+0.1 m on lift ("lift check GRASPED").
+What makes the genuine grasp work (all handled by the launch/driver now):
+
+* **Effort (force) finger control.** The fingers use an `effort` command
+  interface driven by a `forward_command_controller/ForwardCommandController`;
+  the driver publishes a constant **negative** force (`-50 N`, the no-eject
+  sweet spot) to `/panda_hand_controller/commands` to squeeze, held through
+  lift/transport so friction retains the object. Position control could only
+  slip or eject. (mu=30 finger+object friction; finger effort limit 150 N;
+  close velocity 0.04 m/s for symmetric contact.)
+* **Correct grasp pose.** Plan `panda_link8` with `TIP_OFFSET=0.1034` (fingertip
+  TCP, not the wrist), orient the finger axis to the antipodal grasp line, and
+  anchor targets to the object's **settled** pose (it falls ~5 cm before
+  resting).
+* **Robust execution.** Plan from the **current** state, loosened
+  `trajectory_execution.allowed_start_tolerance` (0.1 rad), a controller
+  warm-up, **absolute** manifest paths, and the driver not publishing
+  `/joint_states` in execute mode (the broadcaster owns it).
+* **RViz reflects reality.** The object marker is driven by the object's real gz
+  pose; the arm reflects the broadcaster `/joint_states`.
+
+Grasp success is **shape-dependent** (the inherent reality of friction grasping
+in sim): graspable objects are picked reliably; some shapes slip and the driver
+retries / moves on. There is no weld — failures are honest.
 
 ## Reproducing manuscript numbers
 
