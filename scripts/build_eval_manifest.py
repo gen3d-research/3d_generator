@@ -73,7 +73,9 @@ def main():
                    help="Grasp candidates per object")
     args = p.parse_args()
 
-    exporter = URDFExporter(ExportConfig(use_convex_hull=True))
+    # Mesh collision (not convex hull, not simplified) so the object's collision
+    # matches its visual mesh exactly and rests flush on the table in gz.
+    exporter = URDFExporter(ExportConfig(use_convex_hull=False, simplify_collision=False))
     manifest = []
     for method in args.methods:
         print(f"[{method}] generating top-{args.top_k} objects ...")

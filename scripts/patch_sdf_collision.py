@@ -1,39 +1,30 @@
 #!/usr/bin/env python3
 """
-Rewrite every SDF in the manifest so its <collision> uses a <box> primitive
-matched to the visual mesh's AABB, and inject a gz-sim DetachableJoint
-plugin so the visual_demo driver can weld the object to panda_hand on
-gripper-close and release it on gripper-open.
+Prepare each generated object's SDF for the physical pick demo:
 
-Two reasons for the two transformations to live in the same script:
+1. Keep the **mesh collision** (it now matches the visual mesh exactly, so the
+   object rests flush on the table — no clearance). The old workaround replaced
+   the collision with an AABB box because the trimesh OBJs had no vertex normals
+   and DART rejected them; ``export.py`` now writes normals
+   (``include_normals=True``), so the mesh loads fine as a collision shape and
+   the box (which, lacking a <pose>, sat centered on the link origin and made
+   seated objects float ~half their height above the table) is no longer used.
+   We only bump the collision friction to mu=30 for firm, stable contact.
 
-1. Gazebo / DART chokes on the trimesh-exported collision OBJs because
-   they lack vertex normals (see gz_v4.log: "submesh ... does not have
-   a normal count that matches its vertex count").  Replacing the
-   collision geometry with a box of the right extents is the surgical
-   fix used by every static manipulation benchmark we have looked at.
-   The friction is set to mu=30 (matching the Robotiq cube in the
-   ROS 2 Manipulation Masterclass course, 13/.../ros2_online_workshop.world)
-   so the new firm contact backs up the rigid attach.
+2. Inject a gz-sim DetachableJoint plugin (libgz-sim8-detachable-joint-system)
+   so the visual_demo driver can weld the object to the gripper on attach and
+   release it on detach. NOTE the child link must be ``panda_leftfinger``:
+   ``panda_hand``/``panda_link8`` carry no <inertial> and are dropped by
+   urdf2sdf, so a ``panda_hand`` weld silently never forms.
 
-2. gz-sim Harmonic does not ship a libgazebo_grasp_fix.so analogue (the
-   course's Gazebo Classic plugin).  The closest substitute is
-   libgz-sim8-detachable-joint-system.so, which creates a fixed joint
-   between two named links and exposes attach/detach topics.  Baking
-   the plugin into each spawned object's SDF lets the driver call
-   ``gz topic -t /<obj>/attach`` when the gripper closes and have the
-   object follow panda_hand rigidly through lift/transport/place.
-
-Both edits are idempotent: re-running on an already-patched SDF will
-not duplicate the plugin and will keep the existing box collision.
+Both edits are idempotent: re-running won't duplicate the plugin and re-bumping
+friction is a no-op.
 """
 
 import argparse
 import json
 import re
 from pathlib import Path
-
-import trimesh
 
 
 # Higher mu pads the friction budget so a partially-misaligned grasp
@@ -65,30 +56,13 @@ _DETACHABLE_PLUGIN_TPL = """  <plugin filename="gz-sim-detachable-joint-system"
 """
 
 
-def aabb_of(mesh_path: Path) -> tuple[float, float, float]:
-    m = trimesh.load(str(mesh_path), force="mesh")
-    e = m.bounding_box.extents
-    return float(e[0]), float(e[1]), float(e[2])
-
-
-def patch_sdf(sdf_path: Path, visual_mesh: Path) -> bool:
+def patch_sdf(sdf_path: Path, visual_mesh: Path = None) -> bool:
     sdf_text = sdf_path.read_text()
     orig = sdf_text
-    ex, ey, ez = aabb_of(visual_mesh)
-    new_collision = (
-        f"<collision name=\"collision\">"
-        f"<geometry><box><size>{ex:.6f} {ey:.6f} {ez:.6f}</size></box></geometry>"
-        f"<surface><friction><ode>"
-        f"<mu>{_FRICTION_MU}</mu><mu2>{_FRICTION_MU}</mu2>"
-        f"</ode></friction></surface>"
-        f"</collision>"
-    )
-    sdf_text = re.sub(
-        r"<collision\b[^>]*>.*?</collision>",
-        new_collision,
-        sdf_text,
-        flags=re.DOTALL,
-    )
+
+    # Keep the mesh collision; just firm up the contact friction.
+    sdf_text = re.sub(r"<mu>[^<]*</mu>", f"<mu>{_FRICTION_MU}</mu>", sdf_text)
+    sdf_text = re.sub(r"<mu2>[^<]*</mu2>", f"<mu2>{_FRICTION_MU}</mu2>", sdf_text)
 
     # Inject the DetachableJoint plugin block before </model>, unless
     # this SDF already carries it (idempotent re-run).

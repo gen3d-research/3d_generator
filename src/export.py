@@ -107,8 +107,11 @@ class URDFExporter:
         visual_path = meshes_dir / f"{name}_visual.{ext}"
         collision_path = meshes_dir / f"{name}_collision.{ext}"
         
-        visual_mesh.export(visual_path)
-        collision_mesh.export(collision_path)
+        # include_normals=True writes per-vertex normals (vn) — without them
+        # gz/DART rejects the mesh as a collision shape ("normal count does not
+        # match vertex count"), which is what forced the AABB-box workaround.
+        visual_mesh.export(visual_path, include_normals=True)
+        collision_mesh.export(collision_path, include_normals=True)
         
         # Generate URDF
         urdf_path = output_dir / f"{name}.urdf"
