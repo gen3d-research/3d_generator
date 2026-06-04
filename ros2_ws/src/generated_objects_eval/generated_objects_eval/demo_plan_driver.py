@@ -67,6 +67,35 @@ def look_at_quaternion(approach: np.ndarray) -> Quaternion:
     return Quaternion(x=float(qx), y=float(qy), z=float(qz), w=float(qw))
 
 
+def _mat_to_quat(R) -> Quaternion:
+    qw = 0.5 * math.sqrt(max(0.0, 1 + R[0, 0] + R[1, 1] + R[2, 2]))
+    qx = (R[2, 1] - R[1, 2]) / (4 * qw + 1e-12)
+    qy = (R[0, 2] - R[2, 0]) / (4 * qw + 1e-12)
+    qz = (R[1, 0] - R[0, 1]) / (4 * qw + 1e-12)
+    return Quaternion(x=float(qx), y=float(qy), z=float(qz), w=float(qw))
+
+
+def grasp_quaternion(approach: np.ndarray, axis: np.ndarray) -> Quaternion:
+    """Full grasp orientation for panda_link8.
+
+    panda_link8 +z points toward the object, so it aligns with the (downward)
+    approach. The gripper's fingers open along +y, so y aligns with the
+    antipodal grasp line (contact1->contact2). Without this the fingers close
+    along an arbitrary axis and miss the object entirely.
+    """
+    z = np.asarray(approach, float)
+    z = z / (np.linalg.norm(z) + 1e-12)
+    a = np.asarray(axis, float)
+    y = a - (a @ z) * z                      # project the grasp line off z
+    if np.linalg.norm(y) < 1e-6:             # axis ~parallel to approach: pick any perp
+        ref = np.array([1.0, 0.0, 0.0]) if abs(z[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        y = ref - (ref @ z) * z
+    y /= np.linalg.norm(y) + 1e-12
+    x = np.cross(y, z)
+    R = np.stack([x, y, z], axis=1)
+    return _mat_to_quat(R)
+
+
 def spawn_in_gazebo(sdf: Path, name: str, x: float, y: float, z: float) -> bool:
     req = (
         f'sdf_filename: "{sdf}", name: "{name}", '
@@ -471,13 +500,16 @@ def plan_to_pose(arm, target: PoseStamped, from_current: bool = True,
     return None
 
 
-def pose_stamped(xyz: np.ndarray, approach: np.ndarray) -> PoseStamped:
+def pose_stamped(xyz: np.ndarray, approach: np.ndarray, axis=None) -> PoseStamped:
     ps = PoseStamped()
     ps.header.frame_id = "panda_link0"
     ps.pose.position.x = float(xyz[0])
     ps.pose.position.y = float(xyz[1])
     ps.pose.position.z = float(xyz[2])
-    ps.pose.orientation = look_at_quaternion(approach)
+    # With the antipodal grasp axis we can orient the fingers to straddle the
+    # object; otherwise fall back to approach-only (arbitrary finger axis).
+    ps.pose.orientation = (grasp_quaternion(approach, axis) if axis is not None
+                           else look_at_quaternion(approach))
     return ps
 
 
@@ -543,11 +575,12 @@ def query_object_pose(name: str, timeout: float = 4.0):
     return best
 
 
-def _move(demo, arm, xyz, approach, execute, moveit_py, label, min_s=2.5) -> bool:
+def _move(demo, arm, xyz, approach, execute, moveit_py, label, min_s=2.5,
+          axis=None) -> bool:
     """Plan to a pose, execute it in physics (if executing), and animate it.
     Returns True iff the plan (and execution, when executing) succeeded."""
     demo.get_logger().info(f"  -> {label}")
-    traj = plan_to_pose(arm, pose_stamped(xyz, approach))
+    traj = plan_to_pose(arm, pose_stamped(xyz, approach, axis))
     if traj is None:
         demo.get_logger().warn(f"     plan failed at {label}")
         return False
@@ -593,11 +626,25 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
     TIP_OFFSET = 0.1034
     n_try = min(len(grasps), max_grasp_tries)
 
+    # Grasp centers are in the object's local frame. The object FALLS from its
+    # spawn height and settles ~5 cm lower, so anchor the grasp targets to its
+    # actual settled origin (not the spawn pose) — otherwise every grasp aims
+    # above the real object and the fingers close in empty air.
+    base = spawn.copy()
+    if execute:
+        p = query_object_pose(name)
+        if p is not None:
+            base = np.asarray(p[0], float)
+            demo.get_logger().info(
+                f"  settled object origin {base.round(3).tolist()} "
+                f"(spawn was {spawn.round(3).tolist()})")
+
     picked = False
     grasp_pose = None
     for gi, g in enumerate(grasps[:n_try]):
-        center = spawn + np.asarray(g["center"])
+        center = base + np.asarray(g["center"])
         approach = np.asarray(g["approach"], float)
+        axis = g.get("axis")   # antipodal contact line -> finger-opening axis
         pre = center - approach * (TIP_OFFSET + 0.08)
         grasp = center - approach * TIP_OFFSET
         lift = grasp + np.array([0.0, 0.0, 0.12])
@@ -607,9 +654,9 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
 
         if execute:
             demo.send_gripper_goal(demo.hand_open, max_effort=20.0)
-        if not _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp"):
+        if not _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis):
             continue
-        if not _move(demo, arm, grasp, approach, execute, moveit_py, "grasp"):
+        if not _move(demo, arm, grasp, approach, execute, moveit_py, "grasp", axis=axis):
             continue
 
         # GENUINE grasp: squeeze the fingers onto the object with force; the
@@ -625,7 +672,7 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
             time.sleep(1.2)   # let the contact forces build up
 
         # Lift slowly so the object's inertia doesn't break the friction grip.
-        _move(demo, arm, lift, approach, execute, moveit_py, "lift", min_s=3.5)
+        _move(demo, arm, lift, approach, execute, moveit_py, "lift", min_s=3.5, axis=axis)
 
         if execute:
             z_after = query_object_z(name)
@@ -641,7 +688,7 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
             demo.get_logger().info(
                 f"     lift check GRASPED (held by friction): z {z_before} -> {z_after}")
         picked = True
-        grasp_pose = (grasp, approach, lift)
+        grasp_pose = (grasp, approach, lift, axis)
         break
 
     if not picked:
@@ -651,13 +698,13 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
         return False
 
     # ---- place the (physically held) object, then release it ----
-    grasp, approach, lift = grasp_pose
+    grasp, approach, lift, axis = grasp_pose
     place_pre = lift + np.asarray(place_offset)
     place = place_pre - np.array([0.0, 0.0, 0.06])
     retract = place + np.array([0.0, 0.0, 0.12])
 
-    _move(demo, arm, place_pre, approach, execute, moveit_py, "transport", min_s=3.5)
-    _move(demo, arm, place, approach, execute, moveit_py, "place", min_s=3.0)
+    _move(demo, arm, place_pre, approach, execute, moveit_py, "transport", min_s=3.5, axis=axis)
+    _move(demo, arm, place, approach, execute, moveit_py, "place", min_s=3.0, axis=axis)
 
     # Release: open the fingers; the object drops onto the table under gravity
     # (genuine physics — the RViz marker, tracked from the real pose, follows).
@@ -665,7 +712,7 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
     if execute:
         demo.send_gripper_goal(demo.hand_open, max_effort=20.0)
         time.sleep(0.8)
-    _move(demo, arm, retract, approach, execute, moveit_py, "retract")
+    _move(demo, arm, retract, approach, execute, moveit_py, "retract", axis=axis)
     return True
 
 

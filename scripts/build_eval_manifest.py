@@ -48,9 +48,15 @@ def _baseline_objects(name: str, top_k: int, budget: int, seed: int):
 def _serialise_grasps(grasps, max_keep=5):
     out = []
     for g in grasps[:max_keep]:
+        # axis = the antipodal contact line (contact1 -> contact2). The gripper
+        # must open its fingers along this so they actually straddle the object.
+        axis = np.asarray(g.contact2) - np.asarray(g.contact1)
+        n = float(np.linalg.norm(axis))
+        axis = (axis / n).tolist() if n > 1e-9 else [0.0, 1.0, 0.0]
         out.append({
             "center": g.center.tolist(),
             "approach": g.approach.tolist(),
+            "axis": axis,
             "width": float(g.width),
             "margin": float(g.margin),
         })
