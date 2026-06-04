@@ -504,7 +504,7 @@ class DemoNode(Node):
 # ---------------------------------------------------------------------------
 
 def plan_to_pose(arm, target: PoseStamped, from_current: bool = True,
-                 attempts: int = 4) -> Optional[object]:
+                 attempts: int = 2) -> Optional[object]:
     # Plan from the robot's ACTUAL current state (not a fixed "ready" config),
     # otherwise moveit_py.execute() rejects every trajectory with "start point
     # deviates from current robot state" — the planned start (ready) never
@@ -818,9 +818,10 @@ def main():
     parser.add_argument("--place-dz", type=float, default=0.0)
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--no-gazebo-spawn", action="store_true")
-    parser.add_argument("--max-grasp-tries", type=int, default=3,
+    parser.add_argument("--max-grasp-tries", type=int, default=5,
                         help="Ranked grasp candidates to try per object before "
-                             "giving up (each verified by the lift check).")
+                             "giving up (each verified by the lift check). Also "
+                             "the number of auto-force adjustments per object.")
     parser.add_argument("--execute", action="store_true",
                         help="Also send each plan to panda_arm_controller via "
                              "moveit_py.execute() so the Panda physically moves "
@@ -902,6 +903,13 @@ def main():
 
     spawn_cfg = {"x": args.spawn_x, "y": args.spawn_y, "z": args.spawn_z}
     place_offset = (args.place_dx, args.place_dy, args.place_dz)
+
+    # Start every session from the home config: gz spawns the Panda in a
+    # different pose, and planning the first approach from there produced a large
+    # swing that knocked the object. From home the approach comes from above.
+    if args.execute:
+        demo.set_finger_effort(demo.open_eff)
+        go_home(demo, arm, execute=True, moveit_py=moveit_py)
 
     cycle = 0
     try:

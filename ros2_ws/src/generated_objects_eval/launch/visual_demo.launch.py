@@ -96,6 +96,14 @@ def _build_params_file(use_sim_time: bool = False) -> str:
     cfg["trajectory_execution.allowed_start_tolerance"] = 0.1
     if isinstance(cfg.get("trajectory_execution"), dict):
         cfg["trajectory_execution"]["allowed_start_tolerance"] = 0.1
+    # Clamp a start state that drifts to/just past a joint limit (e.g. a grasp
+    # leaving panda_joint7 at -2.8973) instead of aborting the pipeline with
+    # "Start state out of bounds" — one overshoot would otherwise wedge every
+    # subsequent plan and the demo would stop picking.
+    cfg["start_state_max_bounds_error"] = 0.2
+    for _pl in ("ompl", "ompl_rrtc"):
+        if isinstance(cfg.get(_pl), dict):
+            cfg[_pl]["start_state_max_bounds_error"] = 0.2
     params = {"/**": {"ros__parameters": cfg}}
     fd, path = tempfile.mkstemp(prefix="visual_demo_params_", suffix=".yaml")
     with os.fdopen(fd, "w") as f:

@@ -12,14 +12,18 @@ planning_pipelines:
   pipeline_names: ["ompl"]
 
 plan_request_params:
-  # 15 s + 20 attempts.  Grasping a small object on a table is right at
-  # the edge of the Panda's downward reach: the wrist has to wrap over
-  # the gripper, the elbow has to be tucked high, and the table
-  # CollisionObject squeezes the feasible IK region.  With less budget
-  # RRTConnect frequently fails to sample valid goal-tree states.
-  planning_attempts: 20
+  # A REACHABLE grasp succeeds on the first attempt in <1 s, so this budget only
+  # bounds time on INFEASIBLE poses. 8 x 5 s = 40 s worst case (vs the old
+  # 20 x 15 s = 300 s that made MoveIt "take too long"), while still giving
+  # RRTConnect enough tries to find the feasible-but-tight near-table grasps
+  # (3 x 6 was too little and abandoned graspable poses).
+  planning_attempts: 8
   planning_pipeline: "ompl"
-  max_velocity_scaling_factor: 1.0
-  max_acceleration_scaling_factor: 1.0
+  # CRITICAL: scale motion DOWN. At 1.0 the Panda moved at full speed — the
+  # "strange/violent" start-of-plan motion that knocks the object off the table,
+  # and the fast lift that breaks the friction grip. 0.2 vel / 0.1 accel is
+  # smooth and gentle, holds the grasp, and doesn't disturb the scene.
+  max_velocity_scaling_factor: 0.2
+  max_acceleration_scaling_factor: 0.1
   planner_id: "RRTConnectkConfigDefault"
-  planning_time: 15.0
+  planning_time: 5.0
