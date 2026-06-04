@@ -96,6 +96,13 @@ def main():
             report = plan_grasps(obj, GripperSpec(), n_surface=256,
                                  max_pairs=1500, max_returned=args.n_grasps,
                                  seed=args.seed + k)
+            # Mass + center of mass (object frame) so the demo can (a) auto-size
+            # the closing force and (b) prefer grasps near the CoM.
+            try:
+                mass, _, com = obj.mesh_mass_properties(1000.0)
+            except Exception:
+                mass = obj.total_volume() * 1000.0
+                com = obj.center_of_mass(1000.0)
             manifest.append({
                 "name": obj.name,
                 "method": method,
@@ -105,6 +112,8 @@ def main():
                 "sdf": str(Path(paths["sdf"]).resolve()),
                 "visual_mesh": str(Path(paths["visual_mesh"]).resolve()),
                 "collision_mesh": str(Path(paths["collision_mesh"]).resolve()),
+                "mass": float(mass),
+                "com": list(map(float, com)),
                 "grasps": _serialise_grasps(report.grasps, args.n_grasps),
                 "n_grasps_synth": len(report.grasps),
             })

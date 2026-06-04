@@ -544,15 +544,37 @@ def pose_xyz(xyz, ori=(0.0, 0.0, 0.0, 1.0)) -> Pose:
                 orientation=Quaternion(x=ori[0], y=ori[1], z=ori[2], w=ori[3]))
 
 
-def rank_grasps(grasps):
-    """Order grasp candidates best-first: most top-down approach (easiest to
-    reach and least likely to drive the fingers into the table), then deepest
+def rank_grasps(grasps, com=None):
+    """Order grasp candidates best-first. PRIMARY: closest to the object's
+    center of mass (a CoM grasp is balanced — edge grasps tip/slip), bucketed to
+    1 cm. Then most top-down (reachable, clears the table), then deepest
     friction-cone margin. The demo tries them in this order until one lifts."""
+    com = np.asarray(com, float) if com is not None else None
+
     def key(g):
         ap = np.asarray(g["approach"], float)
         topdown = -ap[2] / (np.linalg.norm(ap) + 1e-9)   # 1.0 == straight down
-        return (round(float(topdown), 3), float(g.get("margin", 0.0)))
-    return sorted(grasps, key=key, reverse=True)
+        d_com = (float(np.linalg.norm(np.asarray(g["center"], float) - com))
+                 if com is not None else 0.0)
+        return (round(d_com, 2), -round(float(topdown), 3), -float(g.get("margin", 0.0)))
+    return sorted(grasps, key=key)   # ascending: nearest CoM + most top-down first
+
+
+def go_home(demo, arm, execute, moveit_py):
+    """Return the arm to the 'ready' home config. Done between cycles so the arm
+    is parked clear of the spawn zone when the next object drops, and so it
+    approaches the new object from above instead of sweeping through it."""
+    demo.get_logger().info("  -> home")
+    arm.set_start_state_to_current_state()
+    arm.set_goal_state(configuration_name="ready")
+    result = arm.plan()
+    if result and result.trajectory is not None:
+        if execute and moveit_py is not None:
+            try:
+                moveit_py.execute(result.trajectory, controllers=["panda_arm_controller"])
+            except Exception:
+                pass
+        demo.animate(result.trajectory, time_scale=1.5, min_stage_seconds=2.0)
 
 
 def query_object_z(name: str, timeout: float = 4.0):
@@ -641,10 +663,19 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
     # so it reflects the actual physics — resting, grasped, lifted, dropped.
     demo.track_object(name, mesh_url, extents)
 
-    grasps = rank_grasps(entry["grasps"]) if entry.get("grasps") else []
+    grasps = rank_grasps(entry["grasps"], entry.get("com")) if entry.get("grasps") else []
     if not grasps:
         demo.get_logger().warn(f"{name}: no grasp candidates")
         return False
+
+    # Auto-size the closing force from the object's mass: heavier objects need a
+    # firmer squeeze, lighter ones get ejected by too much force. This is the
+    # initial guess; it's then adapted per attempt from the contact diagnostic.
+    # Start near the empirical sweet spot (~48 N held a ~0.4 kg object) with a
+    # mild mass scaling; the adaptive loop refines it. Starting low avoids
+    # wasting attempts on ejects (the high-force failure mode).
+    mass = float(entry.get("mass", 0.2))
+    force = float(np.clip(38.0 + 30.0 * mass, 35.0, 60.0))
     # panda_hand sits at panda_link8 (hand_joint origin = 0); the fingertip TCP
     # is ~0.1034 m further along the gripper +z. We plan panda_link8, so offset
     # targets by TIP_OFFSET (NOT 0.207, which double-counted the 0.107 link7->
@@ -690,17 +721,19 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
         # NO DetachableJoint weld — the hold is physics only. Commanding the
         # fingers to ~0 with allow_stalling makes them keep pressing against the
         # object (they stall at its width) rather than stopping at a gap.
-        demo.get_logger().info("  -> close (squeeze)")
+        demo.get_logger().info(f"  -> close (squeeze, force={force:.0f} N)")
         z_before = None
+        finger_after = None
         if execute:
             z_before = query_object_z(name)
-            demo.set_finger_effort(demo.close_eff)
+            demo.set_finger_effort(-force)
             time.sleep(1.2)   # let the contact forces build up
-            # Diagnostic: finger opening after squeeze. >~0.003 means the fingers
-            # stalled on the object (contact made); ~0 means they closed through
-            # empty space (missed it).
+            # Contact diagnostic: finger opening after squeeze. Stalled (>~0.004)
+            # = the fingers are pressing on the object; ~0 = they closed through
+            # empty space / shoved a light object out (ejected).
+            finger_after = demo._finger_pos
             demo.get_logger().info(
-                f"     finger opening after squeeze = {demo._finger_pos} "
+                f"     finger opening after squeeze = {finger_after} "
                 f"(0=closed, 0.04=open)")
 
         # Lift slowly so the object's inertia doesn't break the friction grip.
@@ -709,16 +742,25 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
         if execute:
             z_after = query_object_z(name)
             # Genuine success: the object actually rose with the gripper (held
-            # by friction). If it stayed on the table the grasp slipped — open
-            # and try the next candidate.
+            # by friction). If it stayed on the table the grasp slipped.
             if z_before is not None and z_after is not None and (z_after - z_before) <= 0.05:
+                # AUTO-TUNE the force from the failure mode (contact diagnostic):
+                #   fingers ~closed (<0.004) -> ejected/over-squeezed -> LESS force
+                #   fingers stalled on object  -> grip too weak        -> MORE force
+                if finger_after is not None and finger_after < 0.004:
+                    force = max(25.0, force * 0.6)
+                    why = "ejected -> reduce force"
+                else:
+                    force = min(120.0, force * 1.4)
+                    why = "weak grip -> increase force"
                 demo.get_logger().warn(
-                    f"     lift check SLIPPED (friction grasp did not hold): "
-                    f"z {z_before:.3f} -> {z_after:.3f}; next candidate")
+                    f"     lift check SLIPPED: z {z_before:.3f} -> {z_after:.3f} "
+                    f"({why}, next force={force:.0f} N)")
                 demo.set_finger_effort(demo.open_eff)
                 continue
             demo.get_logger().info(
-                f"     lift check GRASPED (held by friction): z {z_before} -> {z_after}")
+                f"     lift check GRASPED (held by friction, {force:.0f} N): "
+                f"z {z_before} -> {z_after}")
         picked = True
         grasp_pose = (grasp, approach, lift, axis)
         break
@@ -727,6 +769,7 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
         demo.get_logger().warn(f"  {name}: no successful grasp in {n_try} tries")
         if execute:
             demo.set_finger_effort(demo.open_eff)
+        go_home(demo, arm, execute, moveit_py)   # park clear of the spawn zone
         return False
 
     # ---- place the (physically held) object, then release it ----
@@ -745,6 +788,9 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
         demo.set_finger_effort(demo.open_eff)
         time.sleep(0.8)
     _move(demo, arm, retract, approach, execute, moveit_py, "retract", axis=axis)
+    # Park at home so the next object spawns + settles with the arm clear, and
+    # the next approach comes from above instead of sweeping the new object off.
+    go_home(demo, arm, execute, moveit_py)
     return True
 
 
