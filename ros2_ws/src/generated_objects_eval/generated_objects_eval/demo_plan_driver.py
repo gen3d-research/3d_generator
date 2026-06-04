@@ -176,6 +176,32 @@ class DemoNode(Node):
             self, ParallelGripperCommand,
             "/panda_hand_controller/gripper_cmd")
 
+        # Object tracking: a background thread reads the object's ACTUAL pose
+        # from gz and republishes its RViz mesh marker there, so RViz reflects
+        # the real (physics-driven) object position/movement — not a fake pose.
+        self._track = None  # (name, mesh_url, extents) or None
+        threading.Thread(target=self._track_loop, daemon=True).start()
+
+    def track_object(self, name, mesh_url, extents):
+        self._track = (name, mesh_url, np.asarray(extents, dtype=float))
+
+    def _track_loop(self):
+        while not self._stop:
+            tr = self._track
+            if tr is not None:
+                name, mesh_url, extents = tr
+                p = query_object_pose(name)
+                if p is not None:
+                    pos, quat = p
+                    pose = Pose(
+                        position=Point(x=pos[0], y=pos[1], z=pos[2]),
+                        orientation=Quaternion(x=quat[0], y=quat[1],
+                                               z=quat[2], w=quat[3]))
+                    self.publish_object(pose, extents,
+                                        attached_to_link="panda_link0",
+                                        mesh_resource=mesh_url)
+            time.sleep(0.25)
+
     def send_gripper_goal(self, position: float, max_effort: float = 30.0,
                           timeout_s: float = 4.0) -> bool:
         """Drive the parallel gripper to ``position`` (joint opening, m).
@@ -422,21 +448,26 @@ class DemoNode(Node):
 
 # ---------------------------------------------------------------------------
 
-def plan_to_pose(arm, target: PoseStamped, from_current: bool = True) -> Optional[object]:
+def plan_to_pose(arm, target: PoseStamped, from_current: bool = True,
+                 attempts: int = 4) -> Optional[object]:
     # Plan from the robot's ACTUAL current state (not a fixed "ready" config),
     # otherwise moveit_py.execute() rejects every trajectory with "start point
     # deviates from current robot state" — the planned start (ready) never
     # matches where gz_ros2_control actually has the arm. In RViz-only mode the
     # current state comes from the driver's own /joint_states publisher; in
     # gz_ros2_control mode it comes from joint_state_broadcaster.
-    if from_current:
-        arm.set_start_state_to_current_state()
-    else:
-        arm.set_start_state(configuration_name="ready")
-    arm.set_goal_state(pose_stamped_msg=target, pose_link="panda_link8")
-    result = arm.plan()
-    if result and result.trajectory is not None:
-        return result.trajectory
+    #
+    # RRTConnect is randomized and the near-table grasp pose is tight, so retry
+    # a few times before declaring the pose unreachable.
+    for _ in range(max(1, attempts)):
+        if from_current:
+            arm.set_start_state_to_current_state()
+        else:
+            arm.set_start_state(configuration_name="ready")
+        arm.set_goal_state(pose_stamped_msg=target, pose_link="panda_link8")
+        result = arm.plan()
+        if result and result.trajectory is not None:
+            return result.trajectory
     return None
 
 
@@ -487,6 +518,31 @@ def query_object_z(name: str, timeout: float = 4.0):
     return best
 
 
+_NUM = r'(-?\d+\.?\d*(?:e[+\-]?\d+)?)'
+
+
+def query_object_pose(name: str, timeout: float = 4.0):
+    """Full world pose (xyz + quat xyzw) of a spawned gz model, or None.
+    Used to render the object in RViz at its ACTUAL physics pose."""
+    try:
+        out = subprocess.run(
+            ["gz", "topic", "-e", "-t", f"/world/{WORLD_NAME}/pose/info", "-n", "1"],
+            capture_output=True, timeout=timeout).stdout.decode(errors="ignore")
+    except Exception:
+        return None
+    import re
+    best = None
+    for m in re.finditer(
+            r'pose\s*\{[^{}]*?name:\s*"' + re.escape(name)
+            + r'"[^{}]*?position\s*\{([^{}]*?)\}[^{}]*?orientation\s*\{([^{}]*?)\}',
+            out, re.DOTALL):
+        pos = {k: float(v) for k, v in re.findall(r'([xyz])\s*:\s*' + _NUM, m.group(1))}
+        ori = {k: float(v) for k, v in re.findall(r'([xyzw])\s*:\s*' + _NUM, m.group(2))}
+        best = ([pos.get('x', 0.0), pos.get('y', 0.0), pos.get('z', 0.0)],
+                [ori.get('x', 0.0), ori.get('y', 0.0), ori.get('z', 0.0), ori.get('w', 1.0)])
+    return best
+
+
 def _move(demo, arm, xyz, approach, execute, moveit_py, label, min_s=2.5) -> bool:
     """Plan to a pose, execute it in physics (if executing), and animate it.
     Returns True iff the plan (and execution, when executing) succeeded."""
@@ -515,27 +571,26 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
     if entry.get("extents") is not None:
         extents = np.asarray(entry["extents"])
 
-    # Render the static table + the resting object once.  Show the real
-    # visual mesh in RViz so the silhouette matches what gz_sim is
-    # showing (hammer, mug, dumbbell, …) rather than a generic blue box.
+    # Static table for MoveIt + RViz.
     demo.publish_scene()
     mesh_url = None
     visual_mesh = entry.get("visual_mesh")
     if visual_mesh and Path(visual_mesh).is_file():
         mesh_url = f"file://{visual_mesh}"
-    demo.publish_object(pose_xyz(spawn), extents,
-                        attached_to_link="panda_link0",
-                        mesh_resource=mesh_url)
+    name = entry["name"]
+    # RViz shows the object at its REAL gz pose (tracked in a background thread),
+    # so it reflects the actual physics — resting, grasped, lifted, dropped.
+    demo.track_object(name, mesh_url, extents)
 
     grasps = rank_grasps(entry["grasps"]) if entry.get("grasps") else []
     if not grasps:
-        demo.get_logger().warn(f"{entry['name']}: no grasp candidates")
+        demo.get_logger().warn(f"{name}: no grasp candidates")
         return False
-    name = entry["name"]
-    # The planner reports ``center`` as the world point where the fingertips
-    # converge. We plan panda_link8, ~21 cm behind the fingertip along the
-    # gripper +z, so targets are offset by TIP_OFFSET along -approach.
-    TIP_OFFSET = 0.207
+    # panda_hand sits at panda_link8 (hand_joint origin = 0); the fingertip TCP
+    # is ~0.1034 m further along the gripper +z. We plan panda_link8, so offset
+    # targets by TIP_OFFSET (NOT 0.207, which double-counted the 0.107 link7->
+    # link8 segment and left the WRIST — not the fingers — at the object).
+    TIP_OFFSET = 0.1034
     n_try = min(len(grasps), max_grasp_tries)
 
     picked = False
@@ -545,84 +600,72 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
         approach = np.asarray(g["approach"], float)
         pre = center - approach * (TIP_OFFSET + 0.08)
         grasp = center - approach * TIP_OFFSET
-        lift = grasp + np.array([0.0, 0.0, 0.10])
+        lift = grasp + np.array([0.0, 0.0, 0.12])
         demo.get_logger().info(
             f"  grasp candidate {gi + 1}/{n_try} (approach_z={approach[2]:.2f}, "
             f"margin={g.get('margin', 0.0):.3f})")
 
-        demo.set_state(demo._current_q, demo.hand_open)
+        if execute:
+            demo.send_gripper_goal(demo.hand_open, max_effort=20.0)
         if not _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp"):
             continue
         if not _move(demo, arm, grasp, approach, execute, moveit_py, "grasp"):
             continue
 
-        # Close the gripper and weld the object to panda_hand. Record the
-        # object's z first so we can confirm it actually rises after the lift.
-        demo.get_logger().info("  -> close")
-        demo.set_state(demo._current_q, demo.hand_closed)
+        # GENUINE grasp: squeeze the fingers onto the object with force; the
+        # high finger+object friction (mu=30) holds it under gravity. There is
+        # NO DetachableJoint weld — the hold is physics only. Commanding the
+        # fingers to ~0 with allow_stalling makes them keep pressing against the
+        # object (they stall at its width) rather than stopping at a gap.
+        demo.get_logger().info("  -> close (squeeze)")
         z_before = None
         if execute:
-            demo.send_gripper_goal(demo.hand_closed, max_effort=40.0)
             z_before = query_object_z(name)
-            gz_topic_publish(f"/{name}/attach")
-            demo.get_logger().info(f"     attach {name} -> panda_leftfinger (z0={z_before})")
-        time.sleep(0.5)
+            demo.send_gripper_goal(demo.hand_closed, max_effort=80.0)
+            time.sleep(1.2)   # let the contact forces build up
 
-        demo.publish_object(pose_xyz([0.0, 0.0, 0.05]), extents,
-                            attached_to_link="panda_hand",
-                            color=(0.95, 0.55, 0.10, 1.0), mesh_resource=mesh_url)
-        _move(demo, arm, lift, approach, execute, moveit_py, "lift")
+        # Lift slowly so the object's inertia doesn't break the friction grip.
+        _move(demo, arm, lift, approach, execute, moveit_py, "lift", min_s=3.5)
 
         if execute:
             z_after = query_object_z(name)
-            # Only call it a slip when BOTH reads succeed and the object did not
-            # rise; if gz pose can't be read, assume the attach held (don't
-            # throw away a good grasp on a flaky query).
+            # Genuine success: the object actually rose with the gripper (held
+            # by friction). If it stayed on the table the grasp slipped — open
+            # and try the next candidate.
             if z_before is not None and z_after is not None and (z_after - z_before) <= 0.05:
                 demo.get_logger().warn(
-                    f"     lift check SLIPPED: z {z_before:.3f} -> {z_after:.3f}; "
-                    f"trying next candidate")
-                gz_topic_publish(f"/{name}/detach")
-                demo.send_gripper_goal(demo.hand_open, max_effort=10.0)
-                demo.publish_object(pose_xyz(spawn), extents,
-                                    attached_to_link="panda_link0",
-                                    mesh_resource=mesh_url)
+                    f"     lift check SLIPPED (friction grasp did not hold): "
+                    f"z {z_before:.3f} -> {z_after:.3f}; next candidate")
+                demo.send_gripper_goal(demo.hand_open, max_effort=20.0)
                 continue
             demo.get_logger().info(
-                f"     lift check GRASPED: z {z_before} -> {z_after}")
+                f"     lift check GRASPED (held by friction): z {z_before} -> {z_after}")
         picked = True
         grasp_pose = (grasp, approach, lift)
         break
 
     if not picked:
         demo.get_logger().warn(f"  {name}: no successful grasp in {n_try} tries")
-        demo.set_state(PANDA_READY, demo.hand_open)
-        time.sleep(0.8)
+        if execute:
+            demo.send_gripper_goal(demo.hand_open, max_effort=20.0)
         return False
 
-    # ---- place the lifted object ----
+    # ---- place the (physically held) object, then release it ----
     grasp, approach, lift = grasp_pose
     place_pre = lift + np.asarray(place_offset)
-    place = place_pre - np.array([0.0, 0.0, 0.08])
-    retract = place + np.array([0.0, 0.0, 0.10])
+    place = place_pre - np.array([0.0, 0.0, 0.06])
+    retract = place + np.array([0.0, 0.0, 0.12])
 
-    _move(demo, arm, place_pre, approach, execute, moveit_py, "transport")
-    _move(demo, arm, place, approach, execute, moveit_py, "place")
+    _move(demo, arm, place_pre, approach, execute, moveit_py, "transport", min_s=3.5)
+    _move(demo, arm, place, approach, execute, moveit_py, "place", min_s=3.0)
 
-    demo.get_logger().info("  -> open")
-    demo.set_state(demo._current_q, demo.hand_open)
+    # Release: open the fingers; the object drops onto the table under gravity
+    # (genuine physics — the RViz marker, tracked from the real pose, follows).
+    demo.get_logger().info("  -> open (release)")
     if execute:
-        demo.send_gripper_goal(demo.hand_open, max_effort=10.0)
-        gz_topic_publish(f"/{name}/detach")
-        demo.get_logger().info(f"     detach {name}")
-    demo.publish_object(pose_xyz(place + np.array([0.0, 0.0, -0.04])), extents,
-                        attached_to_link="panda_link0",
-                        color=(0.10, 0.55, 0.20, 1.0), mesh_resource=mesh_url)
-    time.sleep(0.5)
+        demo.send_gripper_goal(demo.hand_open, max_effort=20.0)
+        time.sleep(0.8)
     _move(demo, arm, retract, approach, execute, moveit_py, "retract")
-
-    demo.set_state(PANDA_READY, demo.hand_open)
-    time.sleep(0.8)
     return True
 
 
@@ -684,12 +727,10 @@ def main():
         if spawn_in_gazebo(Path(entry["sdf"]), entry["name"],
                            args.spawn_x, args.spawn_y, args.spawn_z):
             print(f"[demo] spawned {entry['name']} in gz_sim", flush=True)
-            # The DetachableJoint plugin in the object's SDF creates the
-            # fixed joint at spawn time.  Immediately detach so the
-            # object is free to fall onto the table under gravity, then
-            # let it settle before MoveIt plans against its resting pose.
-            gz_topic_publish(f"/{entry['name']}/detach")
-            time.sleep(0.8)
+            # Let it fall and settle on the table under gravity before MoveIt
+            # plans against its resting pose. (No DetachableJoint anymore — the
+            # grasp is genuine, held by finger friction.)
+            time.sleep(1.2)
         else:
             print(f"[demo] WARN: spawn failed for {entry['name']}", flush=True)
 
@@ -757,11 +798,8 @@ def main():
                                    args.spawn_x, args.spawn_y, args.spawn_z):
                     print(f"[demo] spawned {next_entry['name']} "
                           f"(cycle {cycle})", flush=True)
-                    # Detach right after spawn (the SDF's plugin auto-
-                    # creates the fixed joint at load) and let gravity
-                    # land the object on the table before the next plan.
-                    gz_topic_publish(f"/{next_entry['name']}/detach")
-                    time.sleep(0.8)
+                    # Let gravity land + settle the object before the next plan.
+                    time.sleep(1.2)
                 else:
                     print(f"[demo] WARN: spawn failed for "
                           f"{next_entry['name']}", flush=True)
