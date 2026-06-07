@@ -437,7 +437,7 @@ class DemoNode(Node):
         return out
 
     def publish_scene(self, table_pose=(0.5, 0.0, 0.2), table_size=(0.8, 0.8, 0.4),
-                      collision_top_clearance: float = 0.04):
+                      collision_top_clearance: float = 0.015):
         """Render the table marker AND publish its MoveIt CollisionObject.
 
         ``collision_top_clearance`` shrinks the CollisionObject from the
@@ -792,6 +792,18 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
         approach = approach / (np.linalg.norm(approach) + 1e-12)
         axis = (_rotate(base_quat, np.asarray(g["axis"])).tolist()
                 if g.get("axis") is not None else None)
+        # Limit insertion depth: the gripper enters along +approach with the palm
+        # (link8) trailing TIP_OFFSET behind the fingertips. If the object extends
+        # toward the gripper past that, the ROOT of the gripper drives into the
+        # object. Pull the grasp back along -approach so link8 clears the object's
+        # near (entry-side) surface by a small margin.
+        if aabb is not None:
+            corners = [base + _rotate(base_quat, np.array([aabb[i][0], aabb[j][1], aabb[k][2]]))
+                       for i in (0, 1) for j in (0, 1) for k in (0, 1)]
+            s_near = min(float(c @ approach) for c in corners)   # entry-side surface
+            over = float(center @ approach) - (s_near + TIP_OFFSET - 0.01)
+            if over > 0:                       # grasp is deeper than the palm can clear
+                center = center - approach * over
         grasp = center - approach * TIP_OFFSET
         pre = center - approach * (TIP_OFFSET + 0.08)
         lift = grasp + np.array([0.0, 0.0, 0.12])
