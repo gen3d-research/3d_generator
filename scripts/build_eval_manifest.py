@@ -59,6 +59,7 @@ def _serialise_grasps(grasps, max_keep=5):
             "axis": axis,
             "width": float(g.width),
             "margin": float(g.margin),
+            "score": float(getattr(g, "score", 0.0)),
         })
     return out
 

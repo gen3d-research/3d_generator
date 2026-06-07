@@ -52,6 +52,7 @@ class Grasp:
     width: float
     approach: np.ndarray         # unit approach vector (from above the grasp toward contacts)
     margin: float                # how deep into friction cone (0 = boundary)
+    score: float = 0.0           # overall quality (set by _score_grasp; higher = better)
 
     @property
     def center(self) -> np.ndarray:
@@ -108,31 +109,45 @@ def _friction_cone_ok(line: np.ndarray, n_out_1: np.ndarray, n_out_2: np.ndarray
     return ok, margin
 
 
-def _approach_collision_free(mesh: trimesh.Trimesh, grasp: Grasp,
-                             gripper: GripperSpec, n_samples: int = 12) -> bool:
-    """Sample probe points along the approach direction in front of each finger
-    and verify they are outside the object.  Uses trimesh's contains query."""
+def _approach_clearance_dist(mesh: trimesh.Trimesh, contacts, approach: np.ndarray,
+                             gripper: GripperSpec, n_samples: int = 12) -> float:
+    """How far the fingers/palm can retract along -approach from the contacts
+    before hitting the object — the free 'runway' for the approach.  Returns a
+    distance in metres, capped at finger_length + palm_clearance (= fully clear).
+
+    ``contacts`` is an iterable of 3D points (one per finger)."""
+    need = gripper.finger_length + gripper.palm_clearance
+    offs = np.linspace(0.002, need, n_samples)
     if not mesh.is_watertight:
-        # contains() is unreliable on non-watertight meshes — fall back to a
-        # signed-distance-style proxy via proximity query.
+        # contains() is unreliable on non-watertight meshes — use signed distance.
         try:
             pq = trimesh.proximity.ProximityQuery(mesh)
         except Exception:
-            return True  # be permissive rather than spuriously failing
-        for c in (grasp.contact1, grasp.contact2):
-            probe = c[None, :] - grasp.approach[None, :] * np.linspace(
-                0.0, gripper.finger_length + gripper.palm_clearance, n_samples)[:, None]
-            d = pq.signed_distance(probe)
-            if np.any(d > 1e-4):  # positive = inside
-                return False
-        return True
-    probes = []
-    for c in (grasp.contact1, grasp.contact2):
-        offs = np.linspace(0.002, gripper.finger_length + gripper.palm_clearance, n_samples)
-        probe = c[None, :] - grasp.approach[None, :] * offs[:, None]
-        probes.append(probe)
-    P = np.vstack(probes)
-    return not np.any(mesh.contains(P))
+            return need  # be permissive rather than spuriously failing
+        worst = need
+        for c in contacts:
+            probe = np.asarray(c)[None, :] - approach[None, :] * offs[:, None]
+            d = pq.signed_distance(probe)            # positive = inside
+            inside = np.where(d > 1e-4)[0]
+            if inside.size:
+                worst = min(worst, float(offs[inside[0]]))
+        return worst
+    worst = need
+    for c in contacts:
+        probe = np.asarray(c)[None, :] - approach[None, :] * offs[:, None]
+        inside = np.where(mesh.contains(probe))[0]
+        if inside.size:
+            worst = min(worst, float(offs[inside[0]]))
+    return worst
+
+
+def _approach_collision_free(mesh: trimesh.Trimesh, grasp: Grasp,
+                             gripper: GripperSpec, n_samples: int = 12) -> bool:
+    """Verify the approach runway in front of both fingers is outside the object."""
+    need = gripper.finger_length + gripper.palm_clearance
+    d = _approach_clearance_dist(mesh, (grasp.contact1, grasp.contact2),
+                                 grasp.approach, gripper, n_samples)
+    return d >= need - 1e-6
 
 
 def _build_grasp(c1, n_out_1, c2, n_out_2, gripper: GripperSpec
@@ -163,6 +178,225 @@ def _build_grasp(c1, n_out_1, c2, n_out_2, gripper: GripperSpec
 
 
 # ---------------------------------------------------------------------------
+# Waist-aware grasp synthesis + scoring
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _GeomCtx:
+    union: trimesh.Trimesh       # mesh used for slicing / clearance (watertight if possible)
+    com: np.ndarray              # object centre of mass (world frame)
+    axes: List[np.ndarray]       # slicing-axis set (unit vectors)
+    diag: float                  # AABB diagonal length (object scale)
+
+
+@dataclass
+class _SliceInfo:
+    centroid3d: np.ndarray       # 3D centroid of the cross-section
+    width: float                 # overall cross-section width (2 * 95th-pct radius)
+    minor_width: float           # extent along the thin (minor) direction
+    minor3d: np.ndarray          # 3D unit vector of the minor (finger-closing) direction
+
+
+def _unit(v: np.ndarray) -> np.ndarray:
+    n = float(np.linalg.norm(v))
+    return v / n if n > 1e-12 else v
+
+
+def _slicing_axes(union: trimesh.Trimesh) -> List[np.ndarray]:
+    """Elongation axis (least principal inertia) plus the world X/Y/Z axes,
+    de-duplicated by near-parallel test. Robust for both elongated and
+    axis-aligned composite objects."""
+    axes: List[np.ndarray] = []
+    try:
+        comp = np.asarray(union.principal_inertia_components, float)
+        vecs = np.asarray(union.principal_inertia_vectors, float)
+        elong = _unit(vecs[int(np.argmin(comp))])
+        axes.append(elong)
+    except Exception:
+        try:  # PCA fallback: largest-variance vertex direction
+            V = np.asarray(union.vertices, float)
+            V = V - V.mean(axis=0)
+            _, _, Vt = np.linalg.svd(V, full_matrices=False)
+            axes.append(_unit(Vt[0]))
+        except Exception:
+            pass
+    for ax in (np.array([1.0, 0, 0]), np.array([0, 1.0, 0]), np.array([0, 0, 1.0])):
+        if all(abs(float(ax @ a)) < 0.98 for a in axes):
+            axes.append(ax)
+    return axes or [np.array([0, 0, 1.0])]
+
+
+def _grasp_geometry(obj: CompositeObject, mesh: trimesh.Trimesh) -> _GeomCtx:
+    try:
+        union = obj.to_mesh(boolean_union=True)
+        if union is None or len(union.vertices) == 0 or len(union.faces) == 0:
+            union = mesh
+    except Exception:
+        union = mesh
+    try:
+        _, _, com = obj.mesh_mass_properties(1000.0)
+        com = np.asarray(com, float)
+    except Exception:
+        try:
+            com = np.asarray(obj.center_of_mass(1000.0), float)
+        except Exception:
+            com = union.vertices.mean(axis=0)
+    try:
+        lo, hi = union.bounds
+        diag = float(np.linalg.norm(hi - lo)) or 1.0
+    except Exception:
+        diag = 1.0
+    return _GeomCtx(union=union, com=com, axes=_slicing_axes(union), diag=diag)
+
+
+def _measure_section(union: trimesh.Trimesh, origin: np.ndarray,
+                     axis: np.ndarray) -> Optional[_SliceInfo]:
+    """Cut a cross-section and measure its width + thin (minor) direction."""
+    try:
+        sec = union.section(plane_origin=origin, plane_normal=axis)
+        if sec is None:
+            return None
+        planar, to_3d = sec.to_planar()
+    except Exception:
+        return None
+    pts = np.asarray(planar.vertices, float)
+    if len(pts) < 3:
+        return None
+    c2d = pts.mean(axis=0)
+    d = pts - c2d
+    r = np.linalg.norm(d, axis=1)
+    width = 2.0 * float(np.percentile(r, 95))
+    # minor axis = smallest-variance direction of the section points
+    try:
+        cov = np.cov(d.T)
+        evals, evecs = np.linalg.eigh(cov)
+        minor2d = evecs[:, 0]
+    except Exception:
+        minor2d = np.array([1.0, 0.0])
+    minor_width = 2.0 * float(np.max(np.abs(d @ minor2d))) if len(d) else width
+    R = np.asarray(to_3d, float)[:3, :3]
+    minor3d = _unit(R @ np.array([minor2d[0], minor2d[1], 0.0]))
+    centroid3d = (np.asarray(to_3d, float) @ np.array([c2d[0], c2d[1], 0.0, 1.0]))[:3]
+    return _SliceInfo(centroid3d=centroid3d, width=width,
+                      minor_width=minor_width, minor3d=minor3d)
+
+
+def _find_waists(ctx: _GeomCtx, gripper: GripperSpec,
+                 n_slices: int = 40, max_waists: int = 8) -> List[_SliceInfo]:
+    """Locally-narrow graspable cross-sections (handles / bridges / necks)."""
+    found: List[_SliceInfo] = []
+    V = np.asarray(ctx.union.vertices, float)
+    for axis in ctx.axes:
+        t = V @ axis
+        lo, hi = float(t.min()), float(t.max())
+        if hi - lo < 1e-4:
+            continue
+        eps = 0.04 * (hi - lo)
+        ts = np.linspace(lo + eps, hi - eps, n_slices)
+        slices = [s for tt in ts
+                  if (s := _measure_section(ctx.union, ctx.com + (tt - ctx.com @ axis) * axis, axis))]
+        if len(slices) < 3:
+            continue
+        w = np.array([s.width for s in slices])
+        # pronounced local minima within the gripper opening
+        for k in range(1, len(w) - 1):
+            if w[k] <= w[k - 1] and w[k] <= w[k + 1] and w[k] <= gripper.width_max:
+                lo_i, hi_i = max(0, k - 4), min(len(w), k + 5)
+                if w[k] < 0.9 * float(w[lo_i:hi_i].max()):
+                    found.append(slices[k])
+        gk = int(np.argmin(w))                  # always consider the global min
+        if w[gk] <= gripper.width_max:
+            found.append(slices[gk])
+    # de-dupe near-identical waists; keep the narrowest few
+    uniq: List[_SliceInfo] = []
+    for s in sorted(found, key=lambda s: s.width):
+        if all(np.linalg.norm(s.centroid3d - u.centroid3d) > 0.01 for u in uniq):
+            uniq.append(s)
+    return uniq[:max_waists]
+
+
+def _surface_hit(mesh: trimesh.Trimesh, origin: np.ndarray, direction: np.ndarray):
+    """Nearest ray hit (point, outward_normal) from origin along direction, or None."""
+    try:
+        locs, _, tri = mesh.ray.intersects_location(
+            ray_origins=origin[None, :], ray_directions=direction[None, :])
+        if len(locs) == 0:
+            return None
+        d = np.linalg.norm(locs - origin[None, :], axis=1)
+        k = int(np.argmin(d))
+        return np.asarray(locs[k], float), np.asarray(mesh.face_normals[tri[k]], float)
+    except Exception:
+        return None
+
+
+def _clear_approach(ctx: _GeomCtx, contacts, grasp_axis: np.ndarray,
+                    gripper: GripperSpec) -> np.ndarray:
+    """Approach perpendicular to the grasp (contact) axis, from the most open
+    side, preferring top-down (-Z). Clearance is measured at the CONTACT points
+    (the fingertips), not the grasp centre (which is inside the object)."""
+    cands = [np.array([0, 0, -1.0]), np.array([1.0, 0, 0]), np.array([-1.0, 0, 0]),
+             np.array([0, 1.0, 0]), np.array([0, -1.0, 0]), np.array([0, 0, 1.0])]
+    best, best_s = None, -1e9
+    for d in cands:
+        a = d - (d @ grasp_axis) * grasp_axis
+        if np.linalg.norm(a) < 1e-3:
+            continue
+        a = _unit(a)
+        clr = _approach_clearance_dist(ctx.union, contacts, a, gripper)
+        s = clr + 0.5 * max(0.0, -float(a[2])) * (gripper.finger_length + gripper.palm_clearance)
+        if s > best_s:
+            best, best_s = a, s
+    if best is None:
+        best = np.array([0, 0, -1.0])
+    if best[2] > 0:                       # convention: point from above toward contacts
+        best = -best
+    return best
+
+
+def _synthesize_waist_grasps(ctx: _GeomCtx, waist: _SliceInfo,
+                             gripper: GripperSpec) -> List[Grasp]:
+    c = waist.centroid3d
+    m = _unit(waist.minor3d)
+    hit1 = _surface_hit(ctx.union, c, -m)
+    hit2 = _surface_hit(ctx.union, c, +m)
+    if hit1 is not None and hit2 is not None:
+        c1, n1 = hit1
+        c2, n2 = hit2
+    else:                                  # analytic fallback (non-watertight / no ray backend)
+        half = 0.5 * waist.minor_width + 0.001
+        c1, n1 = c - half * m, -m
+        c2, n2 = c + half * m, +m
+    g = _build_grasp(np.asarray(c1), np.asarray(n1),
+                     np.asarray(c2), np.asarray(n2), gripper)
+    if g is None:
+        return []
+    g.approach = _clear_approach(ctx, (g.contact1, g.contact2),
+                                 _unit(g.contact2 - g.contact1), gripper)
+    return [g]
+
+
+def _score_grasp(g: Grasp, ctx: _GeomCtx, gripper: GripperSpec,
+                 waist_bonus: float = 0.0) -> float:
+    # Reward NARROW grasps (a "waist"/handle is what a human grabs), but mildly
+    # penalize a knife-edge too thin to grip reliably.
+    w_norm = (g.width - gripper.width_min) / (gripper.width_max - gripper.width_min + 1e-9)
+    f_narrow = float(np.clip(1.0 - w_norm, 0.0, 1.0))
+    if g.width < 0.008:
+        f_narrow *= 0.6
+    d_com = float(np.linalg.norm(g.center - ctx.com)) / (ctx.diag + 1e-9)
+    f_com = float(np.exp(-(d_com / 0.25) ** 2))
+    margin_max = 1.0 - 1.0 / np.sqrt(1.0 + gripper.mu * gripper.mu)
+    f_margin = float(np.clip(g.margin / (margin_max + 1e-9), 0.0, 1.0))
+    f_align = 0.5 * (1.0 - float(_unit(g.normal1) @ _unit(g.normal2)))
+    need = gripper.finger_length + gripper.palm_clearance
+    clr = _approach_clearance_dist(ctx.union, (g.contact1, g.contact2), g.approach, gripper)
+    f_clear = float(np.clip(clr / (need + 1e-9), 0.0, 1.0))
+    f_top = float(np.clip(-g.approach[2], 0.0, 1.0))
+    return (0.28 * f_narrow + 0.22 * f_com + 0.18 * f_margin
+            + 0.12 * f_align + 0.12 * f_clear + 0.08 * f_top + waist_bonus)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -179,32 +413,53 @@ def plan_grasps(obj: CompositeObject, gripper: Optional[GripperSpec] = None,
     if mesh is None:
         return GraspReport(n_attempts=0, n_friction_pass=0, n_collision_free=0)
 
+    ctx = _grasp_geometry(obj, mesh)
+    n_attempts = 0
+    n_friction = 0
+    n_collision = 0
+    candidates: List[Grasp] = []
+    waist_set = set()                       # id() of waist-derived grasps (for source bonus)
+
+    # --- Source A: waist / handle grasps (what a human would pick) ---
+    for waist in _find_waists(ctx, gripper):
+        for g in _synthesize_waist_grasps(ctx, waist, gripper):
+            n_attempts += 1
+            n_friction += 1                 # passed _build_grasp's friction-cone test
+            if _approach_collision_free(ctx.union, g, gripper):
+                n_collision += 1
+                waist_set.add(id(g))
+                candidates.append(g)
+
+    # --- Source B: random antipodal sampler (supplement, esp. for blobby shapes) ---
     pts, n_out = _sample_surface(mesh, n_surface, rng)
     n = len(pts)
-    # Cap the number of candidate pairs we examine.
     n_pairs = min(max_pairs, n * (n - 1) // 2)
     pair_i = rng.integers(0, n, size=n_pairs)
     pair_j = rng.integers(0, n, size=n_pairs)
     keep = pair_i != pair_j
     pair_i, pair_j = pair_i[keep], pair_j[keep]
-
-    n_friction = 0
-    n_collision = 0
-    grasps: List[Grasp] = []
+    cap = max(4 * max_returned, 40)         # generous pool to score, not first-found
     for i, j in zip(pair_i, pair_j):
+        n_attempts += 1
         g = _build_grasp(pts[i], n_out[i], pts[j], n_out[j], gripper)
         if g is None:
             continue
         n_friction += 1
         if _approach_collision_free(mesh, g, gripper):
             n_collision += 1
-            grasps.append(g)
-            if len(grasps) >= max_returned:
+            candidates.append(g)
+            if len(candidates) >= cap:
                 break
-    return GraspReport(n_attempts=len(pair_i),
+
+    # --- Score, sort best-first, truncate ---
+    for g in candidates:
+        g.score = _score_grasp(g, ctx, gripper,
+                               waist_bonus=0.05 if id(g) in waist_set else 0.0)
+    candidates.sort(key=lambda g: g.score, reverse=True)
+    return GraspReport(n_attempts=n_attempts,
                        n_friction_pass=n_friction,
                        n_collision_free=n_collision,
-                       grasps=grasps)
+                       grasps=candidates[:max_returned])
 
 
 def grasp_success_rate(objects, gripper: Optional[GripperSpec] = None,
