@@ -493,6 +493,48 @@ class DemoNode(Node):
         scene.world.collision_objects = [co]
         self.planning_scene_pub.publish(scene)
 
+    def set_object_collision(self, present: bool, base=None, quat=None,
+                             extents=None, aabb=None):
+        """Add/remove the spawned object as a MoveIt collision obstacle (id
+        'demo_object') so the arm plans AROUND it during approach instead of
+        knocking it. A box from the object's AABB at its settled pose; shrunk
+        slightly so the local pre-grasp near the surface isn't over-blocked."""
+        co = CollisionObject()
+        co.header.frame_id = "panda_link0"
+        co.header.stamp = self.get_clock().now().to_msg()
+        co.id = "demo_object"
+        if not present:
+            co.operation = CollisionObject.REMOVE
+        else:
+            co.operation = CollisionObject.ADD
+            if aabb is not None:
+                amin = np.asarray(aabb[0], float)
+                amax = np.asarray(aabb[1], float)
+                size = amax - amin
+                ctr_local = 0.5 * (amin + amax)
+            else:
+                size = np.asarray(extents if extents is not None else [0.05] * 3, float)
+                ctr_local = np.zeros(3)
+            size = np.maximum(size * 0.9, 0.005)
+            base = np.zeros(3) if base is None else np.asarray(base, float)
+            quat = np.array([0.0, 0.0, 0.0, 1.0]) if quat is None else np.asarray(quat, float)
+            ctr_world = base + _rotate(quat, ctr_local)
+            prim = SolidPrimitive()
+            prim.type = SolidPrimitive.BOX
+            prim.dimensions = [float(size[0]), float(size[1]), float(size[2])]
+            co.primitives = [prim]
+            pose = Pose()
+            pose.position.x, pose.position.y, pose.position.z = map(float, ctr_world)
+            pose.orientation = Quaternion(x=float(quat[0]), y=float(quat[1]),
+                                          z=float(quat[2]), w=float(quat[3]))
+            co.primitive_poses = [pose]
+        scene = PlanningScene()
+        scene.is_diff = True
+        scene.world = PlanningSceneWorld()
+        scene.world.collision_objects = [co]
+        self.planning_scene_pub.publish(scene)
+        time.sleep(0.15)   # let the planning-scene monitor apply the diff before planning
+
     def publish_object(self, pose: Pose, extents: np.ndarray,
                        attached_to_link: Optional[str] = None,
                        color=(0.10, 0.45, 0.85, 1.0),
@@ -572,21 +614,18 @@ def pose_xyz(xyz, ori=(0.0, 0.0, 0.0, 1.0)) -> Pose:
 
 
 def rank_grasps(grasps, com=None):
-    """Order grasp candidates best-first to honor the user's intent: VERTICAL
-    (top-down, "facing down") grasps first, and among those the one nearest the
-    object's center of mass (balanced — not an edge), then deepest friction-cone
-    margin. So the opening try is a near-vertical CoM grasp that comes down from
-    above — but using the planner's real graspable faces, so it holds."""
+    """Order grasp candidates best-first. The grasp_planner now SCORES grasps
+    (waist/handle near the CoM, clear approach, deep friction margin) and the
+    manifest is written sorted, so trust that order: rank by the planner's
+    `score` descending, falling back to CoM proximity if no score is present."""
     com = np.asarray(com, float) if com is not None else None
 
     def key(g):
-        ap = np.asarray(g["approach"], float)
-        topdown = -ap[2] / (np.linalg.norm(ap) + 1e-9)   # 1.0 == straight down
+        if "score" in g:
+            return -float(g["score"])
         d_com = (float(np.linalg.norm(np.asarray(g["center"], float) - com))
                  if com is not None else 0.0)
-        vbucket = 0 if topdown >= 0.85 else 1            # near-vertical grasps first
-        return (vbucket, round(d_com, 2), -round(float(topdown), 3),
-                -float(g.get("margin", 0.0)))
+        return d_com
     return sorted(grasps, key=key)
 
 
@@ -697,38 +736,16 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
     # so it reflects the actual physics — resting, grasped, lifted, dropped.
     demo.track_object(name, mesh_url, extents)
 
-    planner_grasps = rank_grasps(entry["grasps"], entry.get("com")) if entry.get("grasps") else []
-
-    # ALWAYS try a vertical top-down grasp FIRST: gripper above the tallest point
-    # of the object, at the object's CoM planar position, facing straight down,
-    # descending vertically. This is the most reliable grasp and what the user
-    # wants as the default opening move. The wrist roll is free for a vertical
-    # grasp, so try several finger-opening axes (narrow side first for the best
-    # grip, then the wide side, then diagonals) and use the first that PLANS —
-    # an exact axis-aligned roll can wedge a wrist joint and fail IK.
-    com = np.asarray(entry.get("com", [0.0, 0.0, 0.025]), float)
-    aabb = entry.get("aabb")
-    ex, ey = float(extents[0]), float(extents[1])
-    theta0 = 0.0 if ex <= ey else math.pi / 2.0          # narrow-side finger axis
-    # Approaches, best-first: exactly vertical, then small tilts (still "facing
-    # down") that are easier to reach — a PERFECTLY straight-down gripper is at
-    # the edge of the Panda's workspace, so the tilts are reachable fallbacks.
-    _s, _c = math.sin(math.radians(20)), math.cos(math.radians(20))
-    approaches = [[0.0, 0.0, -1.0],
-                  [_s, 0.0, -_c], [-_s, 0.0, -_c],
-                  [0.0, _s, -_c], [0.0, -_s, -_c]]
-    vertical_candidates = []
-    for ap in approaches:
-        for dth in (0.0, math.pi / 2.0):                 # narrow then wide finger axis
-            th = theta0 + dth
-            vertical_candidates.append(
-                {"center": com.tolist(), "approach": ap,
-                 "axis": [math.cos(th), math.sin(th), 0.0],
-                 "margin": 1.0, "vertical": True})
-    grasps = vertical_candidates + planner_grasps
+    # The grasp_planner now SCORES grasp points (narrow waist/handle near the CoM,
+    # clear approach, deep friction margin), so the manifest's grasps are already
+    # good choices. Use them best-first — no more synthetic vertical grasp (it
+    # ignored the object's real graspable faces and ejected odd shapes).
+    grasps = rank_grasps(entry["grasps"], entry.get("com")) if entry.get("grasps") else []
     if not grasps:
         demo.get_logger().warn(f"{name}: no grasp candidates")
         return False
+    com = np.asarray(entry.get("com", [0.0, 0.0, 0.025]), float)
+    aabb = entry.get("aabb")
 
     # Auto-size the closing force from the object's mass: heavier objects need a
     # firmer squeeze, lighter ones get ejected by too much force. This is the
@@ -760,87 +777,58 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
                 f"  settled object origin {base.round(3).tolist()} "
                 f"quat {base_quat.round(2).tolist()} (spawn was {spawn.round(3).tolist()})")
 
+    # World-frame top of the object (from its settled, possibly rotated AABB) —
+    # used to hover above it and to size the collision obstacle.
+    if aabb:
+        _corners = [np.array([aabb[i][0], aabb[j][1], aabb[k][2]])
+                    for i in (0, 1) for j in (0, 1) for k in (0, 1)]
+        top_w = max((base + _rotate(base_quat, c))[2] for c in _corners)
+    else:
+        top_w = base[2] + float(extents[2])
+
     picked = False
     grasp_pose = None
-    attempts = 0     # counts only real grasp ATTEMPTS (squeezes), not plan-failures
-    v_attempts = 0   # vertical attempts specifically (capped so planner grasps still run)
-    planner_reset = False
-    VERTICAL_BUDGET = 2    # vertical squeezes (incl. force retries) before planner grasps
-    PER_GRASP_TRIES = 3    # retry the SAME grasp at adjusted force before moving on
+    attempts = 0          # real grasp ATTEMPTS (squeezes); plan-failures don't count
+    PER_GRASP_TRIES = 3   # retry the SAME grasp at adjusted force before moving on
     gi = 0
     per_grasp = 0
     while attempts < max_grasp_tries and gi < len(grasps):
         g = grasps[gi]
-        # The vertical top-down grasp is tried FIRST (user preference); cap the
-        # vertical squeezes so the geometry-aware planner grasps still run.
-        if g.get("vertical") and v_attempts >= VERTICAL_BUDGET:
-            gi += 1
-            per_grasp = 0
-            continue
-        # Falling back from vertical to planner grasps: reset the force to the
-        # mass-based estimate. The vertical attempts have different geometry, so
-        # their force adjustments would mis-tune the (different) planner grasps.
-        if not g.get("vertical") and v_attempts > 0 and not planner_reset:
-            force = force_base
-            planner_reset = True
-        if g.get("vertical"):
-            # Vertical top-down: gripper above the object's tallest point at the
-            # CoM (x, y), facing straight down, descending vertically. approach
-            # and axis are WORLD frame (down + horizontal); the CoM and top are
-            # taken from the object's ACTUAL settled pose so a tipped object is
-            # still grasped at its real CoM / under its real top.
-            approach = np.asarray(g["approach"], float)
-            approach = approach / (np.linalg.norm(approach) + 1e-12)
-            axis = g["axis"]
-            wcom = base + _rotate(base_quat, com)
-            if aabb:
-                corners = [np.array([aabb[i][0], aabb[j][1], aabb[k][2]])
-                           for i in (0, 1) for j in (0, 1) for k in (0, 1)]
-                top_w = max((base + _rotate(base_quat, c))[2] for c in corners)
-            else:
-                top_w = base[2] + float(extents[2])
-            # Fingertips converge at the CoM (x, y), at the CoM height — but kept
-            # high enough that the palm (TIP_OFFSET up the approach) clears the top.
-            ft_z = max(wcom[2], top_w - (TIP_OFFSET - 0.005))
-            ft_z = max(ft_z, base[2] + 0.01)
-            fingertip = np.array([wcom[0], wcom[1], ft_z])
-            grasp = fingertip - approach * TIP_OFFSET
-            # Pre-grasp: back off along -approach so link8 rises to just above the
-            # top (capped to stay in reach). For a tilt this also shifts toward
-            # the base, which is what makes the near-vertical pose reachable.
-            pre_link8_z = min(top_w + TIP_OFFSET + 0.05, base[2] + 0.30)
-            pre_link8_z = max(pre_link8_z, grasp[2] + 0.06)
-            d = (pre_link8_z - grasp[2]) / max(0.30, -approach[2])
-            pre = grasp - approach * d
-            lift = grasp + np.array([0.0, 0.0, 0.12])
-            demo.get_logger().info(
-                f"  grasp candidate (attempt {attempts + 1}/{max_grasp_tries}, "
-                f"VERTICAL top-down at CoM, approach_z={approach[2]:.2f}, "
-                f"start z={pre[2]:.2f}, grasp z={grasp[2]:.2f})")
-        else:
-            # Planner grasp: center/approach/axis are in the OBJECT frame, so
-            # rotate them by the settled orientation.
-            center = base + _rotate(base_quat, np.asarray(g["center"]))
-            approach = _rotate(base_quat, np.asarray(g["approach"], float))
-            axis = (_rotate(base_quat, np.asarray(g["axis"])).tolist()
-                    if g.get("axis") is not None else None)
-            pre = center - approach * (TIP_OFFSET + 0.08)
-            grasp = center - approach * TIP_OFFSET
-            lift = grasp + np.array([0.0, 0.0, 0.12])
-            demo.get_logger().info(
-                f"  grasp candidate (attempt {attempts + 1}/{max_grasp_tries}, "
-                f"approach_z={approach[2]:.2f}, margin={g.get('margin', 0.0):.3f})")
+        # The planner's center/approach/axis are in the OBJECT frame; rotate by
+        # the settled orientation so a tipped object is still grasped correctly.
+        center = base + _rotate(base_quat, np.asarray(g["center"]))
+        approach = _rotate(base_quat, np.asarray(g["approach"], float))
+        approach = approach / (np.linalg.norm(approach) + 1e-12)
+        axis = (_rotate(base_quat, np.asarray(g["axis"])).tolist()
+                if g.get("axis") is not None else None)
+        grasp = center - approach * TIP_OFFSET
+        pre = center - approach * (TIP_OFFSET + 0.08)
+        # Hover directly above the grasp point first, so the arm comes FROM ABOVE
+        # and descends to the grasp rather than sweeping across the table.
+        clear_z = min(top_w + 0.10, base[2] + 0.32)
+        hover = np.array([grasp[0], grasp[1], max(clear_z, grasp[2] + 0.06)])
+        lift = grasp + np.array([0.0, 0.0, 0.12])
+        demo.get_logger().info(
+            f"  grasp candidate (attempt {attempts + 1}/{max_grasp_tries}, "
+            f"score={g.get('score', 0.0):.2f}, approach_z={approach[2]:+.2f}, "
+            f"width={g.get('width', 0.0) * 1000:.0f}mm)")
 
         if execute:
             demo.set_finger_effort(demo.open_eff)
-        if not _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis):
+        # Collision-aware approach: make the object an obstacle for the long
+        # traverse to the hover point (so the arm routes AROUND it instead of
+        # knocking it), then remove it for the local descent into finger contact.
+        demo.set_object_collision(True, base, base_quat, extents, aabb)
+        approached = _move(demo, arm, hover, approach, execute, moveit_py, "hover", axis=axis)
+        demo.set_object_collision(False)
+        if not approached:
             gi += 1; per_grasp = 0; continue   # plan failure: next grasp, no attempt burned
+        if not _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis):
+            gi += 1; per_grasp = 0; continue
         if not _move(demo, arm, grasp, approach, execute, moveit_py, "grasp", axis=axis):
             gi += 1; per_grasp = 0; continue
         attempts += 1   # both poses planned -> this is a real grasp attempt
         per_grasp += 1
-        if g.get("vertical"):
-            v_attempts += 1
 
         # GENUINE grasp: squeeze the fingers onto the object with force; the
         # high finger+object friction (mu=30) holds it under gravity. There is
@@ -957,9 +945,9 @@ def main():
     parser.add_argument("--max-grasp-tries", type=int, default=8,
                         help="Grasp ATTEMPTS (squeezes) per object before giving "
                              "up (each verified by the lift check); plan-failures "
-                             "don't count. The same grasp is retried at adjusted "
-                             "force; vertical top-down is tried first, then "
-                             "geometry-aware planner grasps.")
+                             "don't count. Grasps are tried best-first (planner "
+                             "score) and the same grasp is retried at adjusted "
+                             "force before moving to the next candidate.")
     parser.add_argument("--execute", action="store_true",
                         help="Also send each plan to panda_arm_controller via "
                              "moveit_py.execute() so the Panda physically moves "
