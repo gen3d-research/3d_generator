@@ -777,15 +777,6 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
                 f"  settled object origin {base.round(3).tolist()} "
                 f"quat {base_quat.round(2).tolist()} (spawn was {spawn.round(3).tolist()})")
 
-    # World-frame top of the object (from its settled, possibly rotated AABB) —
-    # used to hover above it and to size the collision obstacle.
-    if aabb:
-        _corners = [np.array([aabb[i][0], aabb[j][1], aabb[k][2]])
-                    for i in (0, 1) for j in (0, 1) for k in (0, 1)]
-        top_w = max((base + _rotate(base_quat, c))[2] for c in _corners)
-    else:
-        top_w = base[2] + float(extents[2])
-
     picked = False
     grasp_pose = None
     attempts = 0          # real grasp ATTEMPTS (squeezes); plan-failures don't count
@@ -803,10 +794,6 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
                 if g.get("axis") is not None else None)
         grasp = center - approach * TIP_OFFSET
         pre = center - approach * (TIP_OFFSET + 0.08)
-        # Hover directly above the grasp point first, so the arm comes FROM ABOVE
-        # and descends to the grasp rather than sweeping across the table.
-        clear_z = min(top_w + 0.10, base[2] + 0.32)
-        hover = np.array([grasp[0], grasp[1], max(clear_z, grasp[2] + 0.06)])
         lift = grasp + np.array([0.0, 0.0, 0.12])
         demo.get_logger().info(
             f"  grasp candidate (attempt {attempts + 1}/{max_grasp_tries}, "
@@ -815,16 +802,14 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
 
         if execute:
             demo.set_finger_effort(demo.open_eff)
-        # Collision-aware approach: make the object an obstacle for the long
-        # traverse to the hover point (so the arm routes AROUND it instead of
-        # knocking it), then remove it for the local descent into finger contact.
+        # Collision-aware approach: make the object an obstacle while moving to
+        # the pre-grasp (so the arm routes AROUND it instead of knocking it),
+        # then remove it for the short local descent into finger contact.
         demo.set_object_collision(True, base, base_quat, extents, aabb)
-        approached = _move(demo, arm, hover, approach, execute, moveit_py, "hover", axis=axis)
+        approached = _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis)
         demo.set_object_collision(False)
         if not approached:
             gi += 1; per_grasp = 0; continue   # plan failure: next grasp, no attempt burned
-        if not _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis):
-            gi += 1; per_grasp = 0; continue
         if not _move(demo, arm, grasp, approach, execute, moveit_py, "grasp", axis=axis):
             gi += 1; per_grasp = 0; continue
         attempts += 1   # both poses planned -> this is a real grasp attempt
