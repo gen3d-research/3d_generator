@@ -387,9 +387,13 @@ def _synthesize_waist_grasps(ctx: _GeomCtx, waist: _SliceInfo,
     e = _unit(waist.axis)                       # elongation: finger-length will align to this
     minor = _unit(waist.minor3d)               # in-section thin direction
     major = _unit(np.cross(e, minor))          # in-section wide direction
+    # Force the side approach (finger-length along the elongation) ONLY for parts
+    # that are clearly elongated AND whose long axis matches this waist's axis —
+    # e.g. a standing cylinder or a handle, where a top-down rim grasp is wrong.
+    # Mildly-elongated / blobby objects keep the clearance-based approach (which
+    # prefers top-down and holds those shapes better).
+    strict = (ctx.elong_ratio > 1.8 and abs(float(e @ ctx.elong)) > 0.9)
     grasps: List[Grasp] = []
-    # Try the narrow pinch first, then the wide one; both close IN the section
-    # plane, so finger-length stays along the elongation.
     for f in (minor, major):
         f = _unit(f - (f @ e) * e)             # keep finger-opening perpendicular to e
         if np.linalg.norm(f) < 1e-6:
@@ -407,17 +411,14 @@ def _synthesize_waist_grasps(ctx: _GeomCtx, waist: _SliceInfo,
                          np.asarray(c2), np.asarray(n2), gripper)
         if g is None:
             continue
-        # Approach perpendicular to BOTH the finger-opening and the elongation
-        # (so finger-length == elongation). Pick the clearer of the two signs.
-        a = _unit(np.cross(e, _unit(g.contact2 - g.contact1)))
-        if np.linalg.norm(a) < 1e-6:
-            a = _clear_approach(ctx, (g.contact1, g.contact2),
-                                _unit(g.contact2 - g.contact1), gripper)
-        else:
+        a = _unit(np.cross(e, _unit(g.contact2 - g.contact1)))   # ⊥ both -> finger-len == e
+        if strict and np.linalg.norm(a) > 1e-6:
             clr_p = _approach_clearance_dist(ctx.union, (g.contact1, g.contact2), a, gripper)
             clr_m = _approach_clearance_dist(ctx.union, (g.contact1, g.contact2), -a, gripper)
-            a = a if clr_p >= clr_m else -a
-        g.approach = a
+            g.approach = a if clr_p >= clr_m else -a
+        else:
+            g.approach = _clear_approach(ctx, (g.contact1, g.contact2),
+                                         _unit(g.contact2 - g.contact1), gripper)
         grasps.append(g)
     return grasps
 
@@ -446,7 +447,7 @@ def _score_grasp(g: Grasp, ctx: _GeomCtx, gripper: GripperSpec,
     y = _unit(g.contact2 - g.contact1)
     y = _unit(y - (y @ z) * z)
     x = np.cross(y, z)                           # finger-length direction
-    elong_factor = float(np.clip((ctx.elong_ratio - 1.1) / 0.4, 0.0, 1.0))
+    elong_factor = float(np.clip((ctx.elong_ratio - 1.6) / 0.6, 0.0, 1.0))
     f_elong = elong_factor * abs(float(x @ ctx.elong))
     return (0.26 * f_narrow + 0.20 * f_com + 0.16 * f_margin
             + 0.10 * f_align + 0.10 * f_clear + 0.04 * f_top
