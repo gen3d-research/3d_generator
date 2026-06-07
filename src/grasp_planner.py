@@ -449,9 +449,15 @@ def _score_grasp(g: Grasp, ctx: _GeomCtx, gripper: GripperSpec,
     x = np.cross(y, z)                           # finger-length direction
     elong_factor = float(np.clip((ctx.elong_ratio - 1.6) / 0.6, 0.0, 1.0))
     f_elong = elong_factor * abs(float(x @ ctx.elong))
-    return (0.26 * f_narrow + 0.20 * f_com + 0.16 * f_margin
-            + 0.10 * f_align + 0.10 * f_clear + 0.04 * f_top
-            + 0.14 * f_elong + waist_bonus)
+    score = (0.26 * f_narrow + 0.20 * f_com + 0.16 * f_margin
+             + 0.10 * f_align + 0.10 * f_clear + 0.04 * f_top
+             + 0.14 * f_elong + waist_bonus)
+    # Closing-margin gate: a grasp near the gripper's MAX opening has almost no
+    # squeeze travel and ejects the object. Penalize multiplicatively so a wide
+    # grasp at the CoM never beats a narrower one. (Full credit at <=65% of max.)
+    margin_frac = (gripper.width_max - g.width) / (gripper.width_max + 1e-9)
+    close_ok = float(np.clip(margin_frac / 0.35, 0.15, 1.0))
+    return score * close_ok
 
 
 # ---------------------------------------------------------------------------
