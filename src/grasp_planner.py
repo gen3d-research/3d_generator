@@ -185,8 +185,10 @@ def _build_grasp(c1, n_out_1, c2, n_out_2, gripper: GripperSpec
 class _GeomCtx:
     union: trimesh.Trimesh       # mesh used for slicing / clearance (watertight if possible)
     com: np.ndarray              # object centre of mass (world frame)
-    axes: List[np.ndarray]       # slicing-axis set (unit vectors)
+    axes: List[np.ndarray]       # slicing-axis set (unit vectors); axes[0] = elongation
     diag: float                  # AABB diagonal length (object scale)
+    elong: np.ndarray            # main elongation direction (unit)
+    elong_ratio: float           # longest extent / largest perpendicular extent (>1 = elongated)
 
 
 @dataclass
@@ -195,6 +197,7 @@ class _SliceInfo:
     width: float                 # overall cross-section width (2 * 95th-pct radius)
     minor_width: float           # extent along the thin (minor) direction
     minor3d: np.ndarray          # 3D unit vector of the minor (finger-closing) direction
+    axis: np.ndarray             # slice normal == the part's LOCAL elongation direction
 
 
 def _unit(v: np.ndarray) -> np.ndarray:
@@ -246,7 +249,20 @@ def _grasp_geometry(obj: CompositeObject, mesh: trimesh.Trimesh) -> _GeomCtx:
         diag = float(np.linalg.norm(hi - lo)) or 1.0
     except Exception:
         diag = 1.0
-    return _GeomCtx(union=union, com=com, axes=_slicing_axes(union), diag=diag)
+    axes = _slicing_axes(union)
+    # How elongated is the object: extent along the main axis vs perpendicular.
+    try:
+        V = np.asarray(union.vertices, float)
+        def _ext(a):
+            t = V @ a
+            return float(t.max() - t.min())
+        ext0 = _ext(axes[0])
+        ext_perp = max((_ext(a) for a in axes[1:]), default=ext0)
+        elong_ratio = ext0 / (ext_perp + 1e-9)
+    except Exception:
+        elong_ratio = 1.0
+    return _GeomCtx(union=union, com=com, axes=axes, diag=diag,
+                    elong=_unit(axes[0]), elong_ratio=float(elong_ratio))
 
 
 def _measure_section(union: trimesh.Trimesh, origin: np.ndarray,
@@ -278,7 +294,7 @@ def _measure_section(union: trimesh.Trimesh, origin: np.ndarray,
     minor3d = _unit(R @ np.array([minor2d[0], minor2d[1], 0.0]))
     centroid3d = (np.asarray(to_3d, float) @ np.array([c2d[0], c2d[1], 0.0, 1.0]))[:3]
     return _SliceInfo(centroid3d=centroid3d, width=width,
-                      minor_width=minor_width, minor3d=minor3d)
+                      minor_width=minor_width, minor3d=minor3d, axis=_unit(axis))
 
 
 def _find_waists(ctx: _GeomCtx, gripper: GripperSpec,
@@ -304,9 +320,16 @@ def _find_waists(ctx: _GeomCtx, gripper: GripperSpec,
                 lo_i, hi_i = max(0, k - 4), min(len(w), k + 5)
                 if w[k] < 0.9 * float(w[lo_i:hi_i].max()):
                     found.append(slices[k])
-        gk = int(np.argmin(w))                  # always consider the global min
-        if w[gk] <= gripper.width_max:
-            found.append(slices[gk])
+        # Always consider the narrowest cross-section; among near-equally-narrow
+        # slices (uniform parts like a plain cylinder) prefer the one nearest the
+        # CoM so the grasp is balanced (mid-length), not at an end/rim.
+        wmin = float(w.min())
+        near = [s for s, ww in zip(slices, w)
+                if ww <= gripper.width_max and ww <= wmin + 0.1 * max(wmin, 1e-6)]
+        if near:
+            com_t = float(ctx.com @ axis)
+            near.sort(key=lambda s: abs(float(s.centroid3d @ axis) - com_t))
+            found.append(near[0])
     # de-dupe near-identical waists; keep the narrowest few
     uniq: List[_SliceInfo] = []
     for s in sorted(found, key=lambda s: s.width):
@@ -355,24 +378,48 @@ def _clear_approach(ctx: _GeomCtx, contacts, grasp_axis: np.ndarray,
 
 def _synthesize_waist_grasps(ctx: _GeomCtx, waist: _SliceInfo,
                              gripper: GripperSpec) -> List[Grasp]:
+    """Grasp the waist with the gripper oriented like a human would: the finger
+    LENGTH runs along the part's elongation, the fingers OPEN across the section,
+    and the approach is perpendicular to the elongation (a side approach). This
+    is what makes a standing cylinder fall between the pads instead of being
+    grabbed at a weird tilt from the rim."""
     c = waist.centroid3d
-    m = _unit(waist.minor3d)
-    hit1 = _surface_hit(ctx.union, c, -m)
-    hit2 = _surface_hit(ctx.union, c, +m)
-    if hit1 is not None and hit2 is not None:
-        c1, n1 = hit1
-        c2, n2 = hit2
-    else:                                  # analytic fallback (non-watertight / no ray backend)
-        half = 0.5 * waist.minor_width + 0.001
-        c1, n1 = c - half * m, -m
-        c2, n2 = c + half * m, +m
-    g = _build_grasp(np.asarray(c1), np.asarray(n1),
-                     np.asarray(c2), np.asarray(n2), gripper)
-    if g is None:
-        return []
-    g.approach = _clear_approach(ctx, (g.contact1, g.contact2),
-                                 _unit(g.contact2 - g.contact1), gripper)
-    return [g]
+    e = _unit(waist.axis)                       # elongation: finger-length will align to this
+    minor = _unit(waist.minor3d)               # in-section thin direction
+    major = _unit(np.cross(e, minor))          # in-section wide direction
+    grasps: List[Grasp] = []
+    # Try the narrow pinch first, then the wide one; both close IN the section
+    # plane, so finger-length stays along the elongation.
+    for f in (minor, major):
+        f = _unit(f - (f @ e) * e)             # keep finger-opening perpendicular to e
+        if np.linalg.norm(f) < 1e-6:
+            continue
+        hit1 = _surface_hit(ctx.union, c, -f)
+        hit2 = _surface_hit(ctx.union, c, +f)
+        if hit1 is not None and hit2 is not None:
+            c1, n1 = hit1
+            c2, n2 = hit2
+        else:                                  # analytic fallback
+            half = 0.5 * waist.minor_width + 0.001
+            c1, n1 = c - half * f, -f
+            c2, n2 = c + half * f, +f
+        g = _build_grasp(np.asarray(c1), np.asarray(n1),
+                         np.asarray(c2), np.asarray(n2), gripper)
+        if g is None:
+            continue
+        # Approach perpendicular to BOTH the finger-opening and the elongation
+        # (so finger-length == elongation). Pick the clearer of the two signs.
+        a = _unit(np.cross(e, _unit(g.contact2 - g.contact1)))
+        if np.linalg.norm(a) < 1e-6:
+            a = _clear_approach(ctx, (g.contact1, g.contact2),
+                                _unit(g.contact2 - g.contact1), gripper)
+        else:
+            clr_p = _approach_clearance_dist(ctx.union, (g.contact1, g.contact2), a, gripper)
+            clr_m = _approach_clearance_dist(ctx.union, (g.contact1, g.contact2), -a, gripper)
+            a = a if clr_p >= clr_m else -a
+        g.approach = a
+        grasps.append(g)
+    return grasps
 
 
 def _score_grasp(g: Grasp, ctx: _GeomCtx, gripper: GripperSpec,
@@ -392,8 +439,18 @@ def _score_grasp(g: Grasp, ctx: _GeomCtx, gripper: GripperSpec,
     clr = _approach_clearance_dist(ctx.union, (g.contact1, g.contact2), g.approach, gripper)
     f_clear = float(np.clip(clr / (need + 1e-9), 0.0, 1.0))
     f_top = float(np.clip(-g.approach[2], 0.0, 1.0))
-    return (0.28 * f_narrow + 0.22 * f_com + 0.18 * f_margin
-            + 0.12 * f_align + 0.12 * f_clear + 0.08 * f_top + waist_bonus)
+    # Finger-LENGTH should run along the object's elongation (so a tall cylinder
+    # sits between the pads, not grabbed at the rim). Only matters when the
+    # object is actually elongated.
+    z = _unit(g.approach)
+    y = _unit(g.contact2 - g.contact1)
+    y = _unit(y - (y @ z) * z)
+    x = np.cross(y, z)                           # finger-length direction
+    elong_factor = float(np.clip((ctx.elong_ratio - 1.1) / 0.4, 0.0, 1.0))
+    f_elong = elong_factor * abs(float(x @ ctx.elong))
+    return (0.26 * f_narrow + 0.20 * f_com + 0.16 * f_margin
+            + 0.10 * f_align + 0.10 * f_clear + 0.04 * f_top
+            + 0.14 * f_elong + waist_bonus)
 
 
 # ---------------------------------------------------------------------------
