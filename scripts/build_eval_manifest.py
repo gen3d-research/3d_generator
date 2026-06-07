@@ -103,6 +103,15 @@ def main():
             except Exception:
                 mass = obj.total_volume() * 1000.0
                 com = obj.center_of_mass(1000.0)
+            # AABB + extents (object frame == spawned-mesh frame) so the demo can
+            # start a vertical grasp above the object's tallest point.
+            try:
+                import trimesh
+                _vm = trimesh.load(paths["visual_mesh"], force="mesh")
+                aabb = [_vm.bounds[0].tolist(), _vm.bounds[1].tolist()]
+                extents = (_vm.bounds[1] - _vm.bounds[0]).tolist()
+            except Exception:
+                aabb, extents = None, None
             manifest.append({
                 "name": obj.name,
                 "method": method,
@@ -114,6 +123,8 @@ def main():
                 "collision_mesh": str(Path(paths["collision_mesh"]).resolve()),
                 "mass": float(mass),
                 "com": list(map(float, com)),
+                "aabb": aabb,
+                "extents": extents,
                 "grasps": _serialise_grasps(report.grasps, args.n_grasps),
                 "n_grasps_synth": len(report.grasps),
             })
