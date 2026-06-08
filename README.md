@@ -100,7 +100,7 @@ Two knobs control how many objects flow through the pipeline:
 ## How It Works
 
 ### 1. Parametric Object Representation
-Objects are compositions of **9 primitive types** (box, cylinder, sphere, capsule, cone, pyramid, torus, ellipsoid, wedge) with rigid transforms. This keeps generation fast and interpretable. See the [**Shape Library & Limitations**](#shape-library--limitations) section below for the full gallery, parameters, and a fidelity audit.
+Objects are compositions of **11 primitive types** (box, cylinder, sphere, capsule, cone, pyramid, torus, ellipsoid, wedge, plus the v2.2 hollow-shell and handle for realistic containers) with rigid transforms. This keeps generation fast and interpretable. See the [**Shape Library & Limitations**](#shape-library--limitations) section below for the full gallery, parameters, and a fidelity audit.
 
 ### 2. Constraint-Based Scoring
 Each object is scored on manipulation-relevant criteria:
@@ -133,7 +133,7 @@ Generated objects are exported with:
 
 ## Shape Library & Limitations
 
-The generator assembles objects from **9 primitive types**. Each row below varies
+The generator assembles objects from **11 primitive types**. Each row below varies
 one type to show its **degrees of freedom** (DOF) — how many independent shape
 parameters it has (sphere = 1, box = 3):
 
@@ -150,23 +150,25 @@ parameters it has (sphere = 1, box = 3):
 | torus | 2 | major, minor | R 0.025–0.08, r 0.005–0.02 |
 | ellipsoid | 3 | rx, ry, rz | 0.01 – 0.08 |
 | wedge | 3 | width, depth, height | 0.015 – 0.14 |
+| **hollow_shell** ✨ | 4 | outer, wall, height, floor | open-top container body |
+| **handle** ✨ | 4 | major, tube_a, tube_b, arc | C-shaped elliptical-tube arc |
 
 ### Faked shapes → missing primitives
 
-Many archetypes are **faithful** (boxes/bars/plates/posts and their assemblies),
-but every **container, handle, taper, and dome is faked** with a solid or
-full-ring stand-in — a mug body is a *solid* cylinder, a cup handle is a *full*
-torus, the `mug_like` handle is even a straight cylinder. This caps generation
-quality: the CEM can only ever assemble *solid* primitives, so it can never
-discover a hollow or handled object no matter how long it trains.
+Most archetypes are **faithful** (boxes/bars/plates/posts and their assemblies).
+The audit found that every **container, handle, taper, and dome was faked** with a
+solid or full-ring stand-in — a mug body was a *solid* cylinder, a cup handle a
+*full* torus. **v2.2 added the `hollow_shell` and `handle` primitives**, so
+mug/cup/pot/teapot/jar/bowl are now real hollow vessels with C-handles (see the
+archetype gallery). Tapers and domes remain on the to-do list.
 
-| Faked feature | Current stand-in | Affected archetypes | Proposed primitive |
-|---|---|---|---|
-| open container | solid cylinder / ellipsoid | mug, cup, pot, jar, bowl, teapot, wine_glass, funnel | **Hollow shell** |
-| C-shaped handle | full torus / straight cylinder | mug, cup, pot, teapot, kettlebell, hook, headphones | **Handle / partial arc** |
-| flared / truncated taper | solid cone (apex) | plunger, trophy, buckets, flowerpots | **Frustum** |
-| dome / scoop | solid sphere / capsule | ladle, lids, bowls | **Hemisphere** |
-| hex fastener | round cylinder / pyramid | nut, bolt | **n-gon prism** |
+| Faked feature | Old stand-in | Archetypes | Primitive | Status |
+|---|---|---|---|---|
+| open container | solid cylinder / ellipsoid | mug, cup, pot, jar, bowl | **Hollow shell** | ✅ built |
+| C-shaped handle | full torus / straight cylinder | mug, cup, pot, teapot | **Handle / arc** | ✅ built |
+| flared / truncated taper | solid cone (apex) | plunger, trophy, buckets | **Frustum** | proposed |
+| dome / scoop | solid sphere / capsule | ladle, lids, bowls | **Hemisphere** | proposed |
+| hex fastener | round cylinder / pyramid | nut, bolt | **n-gon prism** | proposed |
 
 ➡️ **Full gallery, math, per-type limitations, accepted/rejected/optimized sample
 galleries, and ready-to-implement design sketches for the proposed primitives are

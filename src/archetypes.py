@@ -20,7 +20,7 @@ from typing import Callable, Dict
 
 from primitives import (
     CompositeObject, Box, Cylinder, Sphere, Capsule,
-    Cone, Pyramid, Torus, Ellipsoid, Wedge, Transform,
+    Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle, seat_height, Transform,
     # existing v1 factories (registered below)
     create_small_box, create_tall_box, create_flat_box, create_mug_like,
     create_l_shape, create_dumbbell, create_hammer, create_bottle,
@@ -102,6 +102,21 @@ def _pyr(r, h, x=0.0, y=0.0, z=None, euler=None):
 def _tor(R, r, x=0.0, y=0.0, z=None, euler=None):
     z = r if z is None else z
     return Torus(major_radius=R, minor_radius=r, transform=_T(x, y, z, euler))
+
+
+def _shell(R, wall, h, floor=0.005, x=0.0, y=0.0, z=None, euler=None):
+    """Open-top hollow container body. Default z seats it on the ground
+    (its centroid sits above the base because of the floor)."""
+    p = HollowShell(outer_radius=R, wall_thickness=wall, height=h, floor_thickness=floor)
+    z = seat_height(p) if z is None else z
+    p.transform = _T(x, y, z, euler)
+    return p
+
+
+def _handle(R, a, b, arc=1.5 * np.pi, x=0.0, y=0.0, z=None, euler=None):
+    z = a if z is None else z
+    return Handle(major_radius=R, tube_a=a, tube_b=b, arc_angle=arc,
+                  transform=_T(x, y, z, euler))
 
 
 def _ell(rx, ry, rz, x=0.0, y=0.0, z=None, euler=None):
@@ -258,15 +273,26 @@ def create_fork_simple(handle_l: float = 0.09, handle_w: float = 0.012,
 @archetype("bowl")
 def create_bowl(outer_r: float = 0.05, height: float = 0.04) -> CompositeObject:
     base = _cyl(outer_r * 0.5, 0.008)
-    body = _cyl(outer_r, height, z=0.006 + height / 2)
+    # real hollow bowl (open top, walls + floor) instead of a solid disc stack
+    body = _shell(outer_r, 0.005, height, floor=0.006, z=0.005 + seat_height(
+        HollowShell(outer_radius=outer_r, wall_thickness=0.005, height=height, floor_thickness=0.006)))
     return _co("bowl", base, body)
 
 
 @archetype("cup")
 def create_cup(r: float = 0.035, h: float = 0.07) -> CompositeObject:
-    body = _cyl(r, h)
-    handle = _tor(0.016, 0.005, x=r + 0.004, z=h / 2, euler=[0, np.pi / 2, 0])
+    body = _shell(r, 0.004, h, floor=0.006)          # hollow cup body
+    handle = _handle(0.017, 0.005, 0.004, arc=1.4 * np.pi,
+                     x=r + 0.002, z=h * 0.5, euler=[np.pi / 2, 0, 0])   # C-handle
     return _co("cup", body, handle)
+
+
+@archetype("mug_like")     # overrides the v1 solid-cylinder + straight-bar version
+def create_mug(r: float = 0.04, h: float = 0.09) -> CompositeObject:
+    body = _shell(r, 0.004, h, floor=0.006)          # hollow mug body
+    handle = _handle(0.02, 0.006, 0.005, arc=1.4 * np.pi,
+                     x=r + 0.002, z=h * 0.5, euler=[np.pi / 2, 0, 0])   # C-handle
+    return _co("mug_like", body, handle)
 
 
 @archetype("teapot")
@@ -275,7 +301,8 @@ def create_teapot(body_r: float = 0.045, body_h: float = 0.06,
     body = _ell(body_r, body_r, body_h / 2, z=body_h / 2)
     lid = _cap(0.012, 0.012, z=body_h - 0.004)
     spout = _cyl(0.008, spout_l, x=body_r * 0.55, z=body_h * 0.6, euler=[0, np.pi / 3, 0])
-    handle = _tor(0.02, 0.006, x=-body_r * 0.55, z=body_h / 2, euler=[0, np.pi / 2, 0])
+    handle = _handle(0.02, 0.006, 0.005, arc=1.5 * np.pi,
+                     x=-body_r - 0.002, z=body_h / 2, euler=[np.pi / 2, 0, np.pi])
     return _co("teapot", body, lid, spout, handle)
 
 
@@ -307,9 +334,11 @@ def create_wine_glass(base_r: float = 0.03, stem_h: float = 0.06,
 
 @archetype("pot")
 def create_pot(r: float = 0.05, h: float = 0.06) -> CompositeObject:
-    body = _cyl(r, h)
-    h1 = _tor(0.015, 0.005, x=r + 0.002, z=h * 0.7, euler=[0, np.pi / 2, 0])
-    h2 = _tor(0.015, 0.005, x=-r - 0.002, z=h * 0.7, euler=[0, np.pi / 2, 0])
+    body = _shell(r, 0.005, h, floor=0.006)          # hollow pot body
+    h1 = _handle(0.014, 0.005, 0.004, arc=1.2 * np.pi,
+                 x=r + 0.001, z=h * 0.7, euler=[np.pi / 2, 0, 0])
+    h2 = _handle(0.014, 0.005, 0.004, arc=1.2 * np.pi,
+                 x=-r - 0.001, z=h * 0.7, euler=[np.pi / 2, 0, np.pi])
     return _co("pot", body, h1, h2)
 
 
@@ -498,9 +527,12 @@ def create_toy_car(body_l: float = 0.09, body_w: float = 0.04,
 
 @archetype("jar")
 def create_jar(r: float = 0.035, h: float = 0.08, lid_h: float = 0.015) -> CompositeObject:
-    body = _cyl(r, h)
-    lid = _cyl(r * 1.05, lid_h, z=h - 0.003 + lid_h / 2)
-    return _co("jar", body, lid)
+    # Open wide-mouth jar with a threaded neck band. A SEALING lid would trap the
+    # cavity as an enclosed void -> the union mesh has two disconnected surfaces
+    # (outer + inner) and fails is_connected(); the open ring band avoids that.
+    body = _shell(r, 0.004, h, floor=0.005)
+    rim = _tor(r, 0.006, z=h - 0.004)
+    return _co("jar", body, rim)
 
 
 @archetype("crate")

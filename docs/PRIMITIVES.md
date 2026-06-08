@@ -44,8 +44,11 @@ clamped to `[min, max]`):
 | torus | 2 | major, minor | 0.04, 0.012 | 0.025, 0.005 | 0.08, 0.02 |
 | ellipsoid | 3 | rx, ry, rz | 0.04, 0.03, 0.02 | 0.01, 0.01, 0.01 | 0.08, 0.08, 0.08 |
 | wedge | 3 | width, depth, height | 0.05, 0.04, 0.04 | 0.015, 0.015, 0.015 | 0.14, 0.14, 0.14 |
+| hollow_shell ✨ | 4 | outer, wall, height, floor | 0.035, 0.004, 0.07, 0.005 | 0.012, 0.002, 0.02, 0.002 | 0.06, 0.01, 0.14, 0.012 |
+| handle ✨ | 4 | major, tube_a, tube_b, arc | 0.02, 0.006, 0.005, 4.71 | 0.01, 0.003, 0.003, 1.88 | 0.05, 0.012, 0.012, 5.97 |
 
-**Total: 20 sampled shape parameters across 9 types.** Each primitive also
+**Total: 28 sampled shape parameters across 11 types** (✨ = the v2.2 hollow_shell
+and handle, added to fix the faked containers/handles audited below). Each primitive also
 carries a 6-DOF `Transform` (position + orientation) set during composition.
 
 ### Math & construction (per type)
@@ -64,6 +67,8 @@ carries a 6-DOF `Transform` (position + orientation) set during composition.
 | **Torus** | `2π² R r²` | `trimesh.creation.torus` | `_mesh_inertia` |
 | **Ellipsoid** | `4/3 π rx·ry·rz` | unit `icosphere` scaled by `radii` | analytic `m/5·diag(b²+c², …)` |
 | **Wedge** | `½ w·d·h` | manual triangular-prism vertices/faces | `_mesh_inertia` |
+| **HollowShell** ✨ | `π(R²H − Rᵢ²(H−floor))` | outer cylinder **minus** inner cavity (CSG / manifold3d) | `_mesh_inertia` |
+| **Handle** ✨ | `π·a·b·R·arc` | manual elliptical-tube sweep along a circular arc, fan-capped | `_mesh_inertia` |
 
 ### Limitations (what each type **cannot** represent)
 
@@ -189,16 +194,20 @@ Adding any of these is the standard two-step: a `@dataclass` subclass in
 `PRIMITIVE_SPECS` row in `cem.py` + a `PrimitiveType` enum entry, then a `_helper`
 in `archetypes.py` and a rewrite of the affected archetypes.
 
-### 4.1 Hollow shell / open container  ★ highest impact
+> **Status:** 4.1 (hollow shell) and 4.2 (handle) are now **IMPLEMENTED** (v2.2) —
+> see `primitives.py` (`HollowShell`, `Handle`), the two `PRIMITIVE_SPECS` rows in
+> `cem.py`, and the rewired `mug_like`/`cup`/`pot`/`teapot`/`jar`/`bowl` archetypes.
+> 4.3–4.5 (frustum, hemisphere, hex prism) remain proposals.
+
+### 4.1 Hollow shell / open container  ★ ✅ IMPLEMENTED
 - **Replaces:** solid-cylinder bodies of `mug_like`, `cup`, `pot`, `jar`, `bowl`; extends to `teapot`/`wine_glass` (round variant) and `funnel` (open cone).
 - **Params (4 DOF):** `outer_radius`, `wall_thickness`, `height`, `floor_thickness`.
 - **Math:** `V = π·height·outer_r² − π·(height−floor)·(outer_r−wall)²`; inertia via `_mesh_inertia`.
-- **Construction:** revolve the closed `(r,z)` profile `(0,0)→(R,0)→(R,H)→(R−w,H)→(R−w,floor)→(0,floor)` around Z (manual surface-of-revolution).
-- **Feasibility probe:** watertight ✓, 1 body, finite inertia ✓, volume error **−0.3%**.
-- **Spec row template:** `['outer','wall','height','floor']`, defaults `_log(0.035,0.004,0.07,0.005)`, clamp `[0.012,0.002,0.02,0.002]…[0.06,0.01,0.14,0.012]`.
-- **Risk:** the inner cavity is hidden inside the union — verify the boolean union with the handle/body still reports one watertight body; keep `wall ≥ 2 mm` so collision meshes stay robust.
+- **Construction (as built):** outer cylinder **minus** an inner cavity cylinder via CSG (`manifold3d`). A *manual* surface-of-revolution was tried first but its inner/outer walls wind oppositely, corrupting `center_mass` (no `networkx` here to repair winding); the CSG path yields a clean, consistently-wound manifold. Volume error **−0.3%**.
+- **⚠️ Connectivity gotcha (found during integration):** **don't SEAL the cavity.** Capping a hollow shell with a solid lid traps the interior as an enclosed void, so the union mesh has two disconnected surfaces (outer + inner) and `is_connected()` reports **False** (it counts surface components). Mugs/cups/pots stay open → fine. The `jar` uses an **open ring/neck band** (torus) instead of a sealing lid for exactly this reason. A handle/spout that *pierces the wall* connects normally.
+- **Spec row (as built):** `['outer','wall','height','floor']`, defaults `_log(0.035,0.004,0.07,0.005)`, clamp `[0.012,0.002,0.02,0.002]…[0.06,0.01,0.14,0.012]`.
 
-### 4.2 Handle / partial arc  ★ highest impact
+### 4.2 Handle / partial arc  ★ ✅ IMPLEMENTED (elliptical tube, 4 DOF)
 - **Replaces:** the faked handles of `mug_like` (straight cylinder!), `cup`, `pot`, `teapot`, `kettlebell`, `hook`, `headphones`.
 - **Params:** circular tube **3 DOF** `major_radius, tube_radius, arc_angle` (recommended) — or elliptical tube **4 DOF** `+tube_b` (matches the "swept ellipse" idea; flatter, more realistic, one extra CEM param).
 - **Math:** `V ≈ π·tube_r²·major_r·arc_angle` (full torus = `arc=2π`); inertia via `_mesh_inertia`.
@@ -237,17 +246,14 @@ in `archetypes.py` and a rewrite of the affected archetypes.
 
 ### Summary
 
-| Proposal | DOF | Fixes | Construction | Probe |
+| Proposal | DOF | Fixes | Construction | Status |
 |---|---|---|---|---|
-| Hollow shell | 4 | mug, cup, pot, jar, bowl, teapot, wine_glass, funnel | revolve annulus+floor | watertight, −0.3% |
-| Handle / arc | 3–4 | mug, cup, pot, teapot, kettlebell, hook, headphones | manual partial-torus revolve | watertight, ~1.5% |
-| Frustum | 3 | plunger, trophy, buckets, flowerpots | revolve trapezoid | watertight, −0.3% |
-| Hemisphere | 1–2 | ladle, lids, bowls | revolve quarter-circle | watertight, −0.7% |
-| Hex prism | 2 | nut, bolt | `cylinder(sections=6)` | watertight |
+| Hollow shell | 4 | mug, cup, pot, jar, bowl | CSG cylinder − cavity | ✅ **built (v2.2)** |
+| Handle / arc | 4 | mug, cup, pot, teapot | manual elliptical-tube sweep | ✅ **built (v2.2)** |
+| Frustum | 3 | plunger, trophy, buckets, flowerpots | revolve/CSG trapezoid | proposed |
+| Hemisphere | 1–2 | ladle, lids, bowls | revolve quarter-circle | proposed |
+| Hex prism | 2 | nut, bolt | `cylinder(sections=6)` | proposed |
 
-**Recommended first build:** the **Hollow shell** + **Handle** together — they fix
-the entire mug/cup/pot/teapot/jar/bowl family, which is the most visibly faked
-cluster, with the most reuse across archetypes.
-
-> Implementing any of these is intentionally **out of scope for this audit pass** —
-> this document is the menu; pick which to build next.
+**Done (v2.2):** Hollow shell + Handle now fix the mug/cup/pot/teapot/jar/bowl
+family — all six rebuilt and connected; see the archetype gallery. **Next up:**
+frustum + hemisphere (cover the flared/domed remainder), then the hex prism.

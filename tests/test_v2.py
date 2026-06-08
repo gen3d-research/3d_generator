@@ -11,7 +11,7 @@ import pytest
 import primitives as P
 from primitives import (
     Box, Cylinder, Sphere, Capsule, Cone, Pyramid, Torus, Ellipsoid, Wedge,
-    Transform, seat_height,
+    HollowShell, Handle, Transform, seat_height,
 )
 from archetypes import ARCHETYPE_REGISTRY
 from scoring import ObjectScorer, ScoringConfig
@@ -32,6 +32,10 @@ PRIMS = {
     "torus": Torus(major_radius=0.04, minor_radius=0.012),
     "ellipsoid": Ellipsoid(radii=np.array([0.04, 0.03, 0.02])),
     "wedge": Wedge(width=0.05, depth=0.04, height=0.04),
+    "hollow_shell": HollowShell(outer_radius=0.035, wall_thickness=0.004,
+                                height=0.07, floor_thickness=0.005),
+    "handle": Handle(major_radius=0.02, tube_a=0.006, tube_b=0.005,
+                     arc_angle=1.5 * np.pi),
 }
 
 

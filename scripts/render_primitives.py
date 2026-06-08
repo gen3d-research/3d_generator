@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from primitives import (Box, Cylinder, Sphere, Capsule, Cone, Pyramid,  # noqa: E402
-                        Torus, Ellipsoid, Wedge)
+                        Torus, Ellipsoid, Wedge, HollowShell, Handle)
 from cem import PRIMITIVE_SPECS                                          # noqa: E402
 from _render_common import grid                                         # noqa: E402
 
@@ -83,6 +83,16 @@ GALLERY = [
         ("50x40x40", Wedge(width=0.050, depth=0.040, height=0.040)),
         ("100x40x30 ramp", Wedge(width=0.100, depth=0.040, height=0.030)),
         ("40x40x90 tall", Wedge(width=0.040, depth=0.040, height=0.090)),
+    ]),
+    ("HollowShell  (4 DOF: outer, wall, height, floor)", [
+        ("mug R35 t4 H70", HollowShell(outer_radius=0.035, wall_thickness=0.004, height=0.070, floor_thickness=0.006)),
+        ("bowl R55 t5 H35", HollowShell(outer_radius=0.055, wall_thickness=0.005, height=0.035, floor_thickness=0.006)),
+        ("jar R30 t3 H100", HollowShell(outer_radius=0.030, wall_thickness=0.003, height=0.100, floor_thickness=0.005)),
+    ]),
+    ("Handle  (4 DOF: major, tube_a, tube_b, arc)", [
+        ("arc=180", Handle(major_radius=0.022, tube_a=0.006, tube_b=0.005, arc_angle=np.pi)),
+        ("arc=270 C", Handle(major_radius=0.020, tube_a=0.006, tube_b=0.004, arc_angle=1.5 * np.pi)),
+        ("flat tube arc=300", Handle(major_radius=0.020, tube_a=0.008, tube_b=0.004, arc_angle=1.65 * np.pi)),
     ]),
 ]
 

@@ -24,6 +24,9 @@ class PrimitiveType(Enum):
     TORUS = "torus"
     ELLIPSOID = "ellipsoid"
     WEDGE = "wedge"
+    # v2.2 additions — hollow/handled shapes for realistic containers.
+    HOLLOW_SHELL = "hollow_shell"
+    HANDLE = "handle"
 
 
 @dataclass
@@ -360,6 +363,133 @@ class Wedge(Primitive):
 
     def volume(self) -> float:
         return 0.5 * self.width * self.height * self.depth
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+def _finish_mesh(verts, faces, transform) -> trimesh.Trimesh:
+    """Build a manual mesh, ensure outward winding (positive volume), recenter on
+    its centroid (so ``transform.translation == world centroid``, the project
+    contract), then apply the transform."""
+    mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=True)
+    # Gate on is_watertight (topological), NOT is_volume — the latter needs
+    # is_winding_consistent, which needs networkx (absent here) and so returns
+    # False even for a perfectly good mesh. Signed volume + center_mass are valid
+    # on any watertight, consistently-wound mesh; invert() flips a globally-
+    # inward winding to outward (positive volume -> correct inertia/centroid).
+    if mesh.is_watertight:
+        if mesh.volume < 0:
+            mesh.invert()
+        mesh.apply_translation(-mesh.center_mass)
+    mesh.apply_transform(transform.as_matrix())
+    return mesh
+
+
+@dataclass
+class HollowShell(Primitive):
+    """Open-top hollow cylinder — a cup/mug/pot/jar/bowl BODY with a real wall and
+    floor (the cavity is what makes containers look right instead of solid pegs).
+    Aligned with +Z, open at the top, centered on its centroid."""
+    outer_radius: float = 0.035
+    wall_thickness: float = 0.004
+    height: float = 0.07
+    floor_thickness: float = 0.005
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.HOLLOW_SHELL)
+
+    def _dims(self):
+        R = float(self.outer_radius)
+        H = float(self.height)
+        w = float(np.clip(self.wall_thickness, 0.001, R - 0.001))
+        fl = float(np.clip(self.floor_thickness, 0.001, H - 0.001))
+        return R, H, w, fl, R - w
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        R, H, w, fl, Ri = self._dims()
+        # outer solid cylinder minus an inner cavity cylinder (open top). CSG
+        # (manifold3d, already required for unions) yields a clean, consistently-
+        # wound manifold — unlike a manual revolve, whose inner/outer walls wind
+        # oppositely and corrupt center_mass without networkx to repair them. If
+        # no CSG backend is present, fall back to a solid cylinder.
+        outer = trimesh.creation.cylinder(radius=R, height=H, sections=48)
+        outer.apply_translation([0.0, 0.0, H / 2.0])
+        pad = 0.01
+        hc = (H - fl) + pad
+        inner = trimesh.creation.cylinder(radius=Ri, height=hc, sections=48)
+        inner.apply_translation([0.0, 0.0, fl + hc / 2.0])
+        try:
+            shell = outer.difference(inner)
+        except Exception:
+            shell = outer
+        if shell.is_watertight:
+            shell.apply_translation(-shell.center_mass)
+        shell.apply_transform(self.transform.as_matrix())
+        return shell
+
+    def volume(self) -> float:
+        R, H, w, fl, Ri = self._dims()
+        return float(np.pi * (R * R * H - Ri * Ri * (H - fl)))
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+@dataclass
+class Handle(Primitive):
+    """C-shaped handle: an ELLIPTICAL tube cross-section swept along a circular arc
+    (a partial torus). Replaces the faked full-torus / straight-cylinder handles on
+    mugs, cups, pots, teapots, kettlebells, hooks. The arc is symmetric about +X
+    and opens toward -X (so it attaches against a body wall on the +X side).
+    Centered on its centroid."""
+    major_radius: float = 0.02
+    tube_a: float = 0.006      # in-plane (radial) semi-axis of the tube
+    tube_b: float = 0.005      # out-of-plane (z) semi-axis of the tube
+    arc_angle: float = 1.5 * np.pi
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.HANDLE)
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        R = float(self.major_radius)
+        a = float(max(self.tube_a, 1e-3))
+        b = float(max(self.tube_b, 1e-3))
+        arc = float(np.clip(self.arc_angle, 0.4, 2.0 * np.pi - 0.05))
+        n_major = max(8, int(48 * arc / (2.0 * np.pi)))
+        n_minor = 18
+        phi = np.linspace(-arc / 2.0, arc / 2.0, n_major)
+        tt = np.linspace(0.0, 2.0 * np.pi, n_minor, endpoint=False)
+        ct, st = np.cos(tt), np.sin(tt)
+        verts = []
+        for p in phi:
+            cx, cy = R * np.cos(p), R * np.sin(p)
+            ex, ey = np.cos(p), np.sin(p)        # in-plane radial direction
+            for k in range(n_minor):
+                rad = a * ct[k]
+                verts.append([cx + rad * ex, cy + rad * ey, b * st[k]])
+        faces = []
+        for i in range(n_major - 1):
+            for k in range(n_minor):
+                k2 = (k + 1) % n_minor
+                A = i * n_minor + k; B = i * n_minor + k2
+                C = (i + 1) * n_minor + k; D = (i + 1) * n_minor + k2
+                faces += [[A, B, D], [A, D, C]]
+        # fan-cap both open ends to the tube-centre point
+        c0 = len(verts); verts.append([R * np.cos(phi[0]), R * np.sin(phi[0]), 0.0])
+        for k in range(n_minor):
+            faces.append([c0, (k + 1) % n_minor, k])
+        base = (n_major - 1) * n_minor
+        c1 = len(verts); verts.append([R * np.cos(phi[-1]), R * np.sin(phi[-1]), 0.0])
+        for k in range(n_minor):
+            faces.append([c1, base + k, base + (k + 1) % n_minor])
+        return _finish_mesh(np.asarray(verts, float), np.asarray(faces, int),
+                            self.transform)
+
+    def volume(self) -> float:
+        # cross-section area (π·a·b) × swept centroid path (R·arc_angle)
+        arc = float(np.clip(self.arc_angle, 0.4, 2.0 * np.pi - 0.05))
+        return float(np.pi * self.tube_a * self.tube_b * self.major_radius * arc)
 
     def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
         return self._mesh_inertia(density)

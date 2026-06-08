@@ -23,7 +23,7 @@ from pathlib import Path
 
 from primitives import (
     CompositeObject, Primitive, Box, Cylinder, Sphere, Capsule,
-    Cone, Pyramid, Torus, Ellipsoid, Wedge,
+    Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle,
     Transform, PrimitiveType, seat_height, half_extents,
 )
 from scoring import ObjectScorer, ScoreBreakdown, ScoringConfig
@@ -106,6 +106,21 @@ PRIMITIVE_SPECS: List[PrimitiveSpec] = [
                   np.array([0.015, 0.015, 0.015]), np.array([0.14, 0.14, 0.14]),
                   build=lambda p, t: Wedge(width=p[0], depth=p[1], height=p[2], transform=t),
                   extract=lambda pr: np.array([pr.width, pr.depth, pr.height])),
+    PrimitiveSpec(PrimitiveType.HOLLOW_SHELL, ['outer', 'wall', 'height', 'floor'],
+                  _log(0.035, 0.004, 0.07, 0.005), np.array([0.3, 0.25, 0.3, 0.25]),
+                  np.array([0.012, 0.002, 0.02, 0.002]), np.array([0.06, 0.01, 0.14, 0.012]),
+                  build=lambda p, t: HollowShell(outer_radius=p[0], wall_thickness=p[1],
+                                                 height=p[2], floor_thickness=p[3], transform=t),
+                  extract=lambda pr: np.array([pr.outer_radius, pr.wall_thickness,
+                                               pr.height, pr.floor_thickness])),
+    PrimitiveSpec(PrimitiveType.HANDLE, ['major', 'tube_a', 'tube_b', 'arc'],
+                  _log(0.02, 0.006, 0.005, 1.5 * np.pi), np.array([0.3, 0.25, 0.25, 0.2]),
+                  np.array([0.01, 0.003, 0.003, 0.6 * np.pi]),
+                  np.array([0.05, 0.012, 0.012, 1.9 * np.pi]),
+                  build=lambda p, t: Handle(major_radius=p[0], tube_a=p[1], tube_b=p[2],
+                                            arc_angle=p[3], transform=t),
+                  extract=lambda pr: np.array([pr.major_radius, pr.tube_a, pr.tube_b,
+                                               pr.arc_angle])),
 ]
 
 # Default type bias: favor box/cylinder slightly, rest uniform.
