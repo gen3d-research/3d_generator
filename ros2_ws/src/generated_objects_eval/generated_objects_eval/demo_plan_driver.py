@@ -793,6 +793,119 @@ def _move(demo, arm, xyz, approach, execute, moveit_py, label, min_s=2.5,
     return True
 
 
+# Panda arm joint limits (rad) — used to score how far an IK config sits from a
+# limit (more margin = more freedom for the descent / less chance of a wedge).
+_PANDA_LIMITS = [(-2.8973, 2.8973), (-1.7628, 1.7628), (-2.8973, 2.8973),
+                 (-3.0718, -0.0698), (-2.8973, 2.8973), (-0.0175, 3.7525),
+                 (-2.8973, 2.8973)]
+
+
+def _limit_margin(q) -> float:
+    """Min normalized distance to a joint limit over the arm (0 = at a limit)."""
+    m = 1.0
+    for v, (lo, hi) in zip(q, _PANDA_LIMITS):
+        m = min(m, (min(v - lo, hi - v)) / (0.5 * (hi - lo) + 1e-9))
+    return max(0.0, float(m))
+
+
+def _move_to_config(demo, arm, q, execute, moveit_py, label, min_s=2.5) -> bool:
+    """Plan + execute a move to a specific arm JOINT configuration (not a Cartesian
+    pose). Used so the pre-grasp lands in a config consistent with the grasp."""
+    demo.get_logger().info(f"  -> {label}")
+    from moveit.core.robot_state import RobotState
+    rs_goal = RobotState(moveit_py.get_robot_model())
+    rs_goal.set_joint_group_positions("panda_arm", np.asarray(q, float))
+    rs_goal.update()
+    traj = None
+    for _ in range(2):
+        arm.set_start_state_to_current_state()
+        arm.set_goal_state(robot_state=rs_goal)
+        res = arm.plan()
+        if res and res.trajectory is not None:
+            traj = res.trajectory
+            break
+    if traj is None:
+        demo.get_logger().warn(f"     plan failed at {label}")
+        return False
+    if execute and moveit_py is not None:
+        try:
+            moveit_py.execute(traj, controllers=["panda_arm_controller"])
+        except Exception as exc:
+            demo.get_logger().warn(f"     execute failed at {label}: {exc}")
+            return False
+    demo.animate(traj, time_scale=1.5, min_stage_seconds=min_s)
+    return True
+
+
+def _reachable_chains(demo, moveit_py, cands, n_seeds: int = 4):
+    """Reachability-scored approach->grasp selection. For each candidate, solve IK
+    for the GRASP pose (several seeds -> different 7-DOF branches), keep the ones
+    that are collision-free against the real-mesh scene (fingers open), then solve
+    the PRE-GRASP IK SEEDED FROM the grasp config so the two are kinematically
+    aligned (the descent is then a short, reliable move). Score each chain by
+    joint-limit margin x descent shortness, and rank candidates by
+    geometric_score x plannability. Returns [{idx, pre_q, grasp_q, combined}, ...]
+    best-first, or [] if MoveIt/IK is unavailable (caller falls back)."""
+    try:
+        from moveit.core.robot_state import RobotState
+        rm = moveit_py.get_robot_model()
+        psm = moveit_py.get_planning_scene_monitor()
+        hand = next((g for g in rm.joint_model_group_names if g != "panda_arm"), None)
+    except Exception as exc:
+        demo.get_logger().warn(f"  reachable-chain setup failed ({exc}); Cartesian fallback")
+        return []
+
+    base_seed = (list(demo._arm_q) if demo._arm_q is not None
+                 else [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785])
+    seeds = [base_seed]
+    for dq in (0.9, -0.9, 1.8):          # explore redundant IK branches
+        s = list(base_seed)
+        s[0] += dq
+        seeds.append(s)
+    seeds = seeds[:n_seeds]
+
+    def _ik(pose, seed):
+        rsx = RobotState(rm)
+        rsx.set_joint_group_positions("panda_arm", np.asarray(seed, float))
+        if hand is not None:
+            try:
+                rsx.set_joint_group_positions(hand, np.array([0.04, 0.04]))
+            except Exception:
+                pass
+        rsx.update()
+        if not rsx.set_from_ik("panda_arm", pose, "panda_link8", timeout=0.1):
+            return None
+        rsx.update()
+        try:
+            with psm.read_only() as scene:
+                if not scene.is_state_valid(rsx, "panda_arm"):
+                    return None
+        except Exception:
+            pass                          # validity unavailable -> let planning catch it
+        return np.asarray(rsx.get_joint_group_positions("panda_arm"), float)
+
+    out = []
+    for idx, c in enumerate(cands):
+        best = None
+        for seed in seeds:
+            gq = _ik(c["grasp_pose"], seed)
+            if gq is None:
+                continue
+            pq = _ik(c["pre_pose"], gq)   # seed pre-grasp FROM the grasp config
+            if pq is None:
+                continue
+            descent = float(np.linalg.norm(gq - pq))
+            plann = min(_limit_margin(gq), _limit_margin(pq)) * \
+                float(np.clip(1.0 - descent / 2.0, 0.2, 1.0))
+            if best is None or plann > best[2]:
+                best = (pq, gq, plann)
+        if best is not None:
+            out.append({"idx": idx, "pre_q": best[0], "grasp_q": best[1],
+                        "combined": (c["geo"] + 0.05) * best[2]})
+    out.sort(key=lambda d: -d["combined"])
+    return out
+
+
 def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
                         execute: bool = False, moveit_py=None,
                         max_grasp_tries: int = 3):
@@ -859,54 +972,94 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
     grasp_pose = None
     attempts = 0          # real grasp ATTEMPTS (squeezes); plan-failures don't count
     PER_GRASP_TRIES = 3   # retry the SAME grasp at adjusted force before moving on
-    gi = 0
-    per_grasp = 0
-    while attempts < max_grasp_tries and gi < len(grasps):
-        g = grasps[gi]
-        # The planner's center/approach/axis are in the OBJECT frame; rotate by
-        # the settled orientation so a tipped object is still grasped correctly.
+
+    # ---- Pre-pass: per-candidate geometry (rotation to settled pose + insertion
+    # clamp) and grasp/pre-grasp poses for the top candidates. ----
+    TOPK = min(len(grasps), max(6, max_grasp_tries))
+    cands = []
+    for g in grasps[:TOPK]:
+        # center/approach/axis are in the OBJECT frame; rotate to the settled pose.
         center = base + _rotate(base_quat, np.asarray(g["center"]))
         approach = _rotate(base_quat, np.asarray(g["approach"], float))
         approach = approach / (np.linalg.norm(approach) + 1e-12)
         axis = (_rotate(base_quat, np.asarray(g["axis"])).tolist()
                 if g.get("axis") is not None else None)
-        # Limit insertion depth: the gripper enters along +approach with the palm
-        # (link8) trailing TIP_OFFSET behind the fingertips. If the object extends
-        # toward the gripper past that, the ROOT of the gripper drives into the
-        # object. Pull the grasp back along -approach so link8 clears the object's
-        # near (entry-side) surface by a small margin.
+        # Insertion clamp: pull the grasp back along -approach so the palm (link8)
+        # clears the object's entry-side surface instead of ramming it.
         if aabb is not None:
             corners = [base + _rotate(base_quat, np.array([aabb[i][0], aabb[j][1], aabb[k][2]]))
                        for i in (0, 1) for j in (0, 1) for k in (0, 1)]
-            s_near = min(float(c @ approach) for c in corners)   # entry-side surface
+            s_near = min(float(cc @ approach) for cc in corners)
             over = float(center @ approach) - (s_near + TIP_OFFSET - 0.01)
-            if over > 0:                       # grasp is deeper than the palm can clear
+            if over > 0:
                 center = center - approach * over
         grasp = center - approach * TIP_OFFSET
         pre = center - approach * (TIP_OFFSET + 0.08)
         lift = grasp + np.array([0.0, 0.0, 0.12])
+        quat = (grasp_quaternion(approach, axis) if axis is not None
+                else look_at_quaternion(approach))
+        ori = (quat.x, quat.y, quat.z, quat.w)
+        cands.append({"g": g, "approach": approach, "axis": axis, "grasp": grasp,
+                      "pre": pre, "lift": lift, "geo": float(g.get("score", 0.0)),
+                      "grasp_pose": pose_xyz(grasp, ori), "pre_pose": pose_xyz(pre, ori)})
+
+    # Put the object's REAL mesh in the scene (IK validity + routing the wrist
+    # around it) and open the fingers so the straddle config is collision-free.
+    demo.set_object_collision(True, base, base_quat, extents, aabb,
+                              mesh_path=entry.get("collision_mesh"))
+    if execute:
+        demo.set_finger_effort(demo.open_eff)
+        time.sleep(0.8)
+
+    # Reachability-scored selection: rank candidates by geometry x plannability,
+    # with a kinematically-consistent pre-grasp->grasp joint pair. Falls back to
+    # the original independent-Cartesian planning if IK/MoveIt is unavailable.
+    chains = _reachable_chains(demo, moveit_py, cands) if (execute and moveit_py is not None) else []
+    if chains:
+        demo.get_logger().info(
+            f"  reachability-scored: {len(chains)}/{len(cands)} candidates have a "
+            f"valid approach->grasp chain (best combined={chains[0]['combined']:.2f})")
+        # IK-chains first (best-ranked, kinematically consistent); then the
+        # remaining candidates as Cartesian fallbacks so coverage isn't reduced.
+        chain_idx = {ch["idx"] for ch in chains}
+        ordered = [dict(cands[ch["idx"]], pre_q=ch["pre_q"], grasp_q=ch["grasp_q"])
+                   for ch in chains]
+        ordered += [dict(cands[i], pre_q=None, grasp_q=None)
+                    for i in range(len(cands)) if i not in chain_idx]
+    else:
+        ordered = [dict(c, pre_q=None, grasp_q=None) for c in cands]
+
+    ci = 0
+    per_grasp = 0
+    while attempts < max_grasp_tries and ci < len(ordered):
+        c = ordered[ci]
+        g, approach, axis = c["g"], c["approach"], c["axis"]
+        grasp, pre, lift = c["grasp"], c["pre"], c["lift"]
         demo.get_logger().info(
             f"  grasp candidate (attempt {attempts + 1}/{max_grasp_tries}, "
             f"score={g.get('score', 0.0):.2f}, approach_z={approach[2]:+.2f}, "
-            f"width={g.get('width', 0.0) * 1000:.0f}mm)")
+            f"width={g.get('width', 0.0) * 1000:.0f}mm, "
+            f"{'IK-chain' if c['pre_q'] is not None else 'cartesian'})")
 
         # PHASE 1 (arm): open the fingers, then move so the OPEN gripper straddles
         # the object — fingertips on either side, object in the gap (no contact).
-        # The object's REAL collision mesh is in the planning scene through BOTH
-        # the pre-grasp move AND the descent, so MoveIt routes the hand/wrist
-        # AROUND it the whole way (the root no longer rams the object). With the
-        # fingers open the straddle pose is collision-free, so the plan succeeds.
+        # The object's REAL collision mesh stays in the scene through BOTH the
+        # pre-grasp and the descent, so MoveIt routes the hand/wrist AROUND it. A
+        # reachability chain plans kinematically-consistent JOINT goals (pre-grasp
+        # aligned with the grasp); otherwise fall back to Cartesian poses.
         if execute:
             demo.set_finger_effort(demo.open_eff)
-            time.sleep(0.8)   # let the fingers fully OPEN before planning the straddle
         demo.set_object_collision(True, base, base_quat, extents, aabb,
                                   mesh_path=entry.get("collision_mesh"))
-        if not _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis):
+        if c["pre_q"] is not None:
+            ok = _move_to_config(demo, arm, c["pre_q"], execute, moveit_py, "pre-grasp")
+            ok = ok and _move_to_config(demo, arm, c["grasp_q"], execute, moveit_py, "straddle")
+        else:
+            ok = _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis)
+            ok = ok and _move(demo, arm, grasp, approach, execute, moveit_py, "straddle", axis=axis)
+        if not ok:
             demo.set_object_collision(False)
-            gi += 1; per_grasp = 0; continue   # plan failure: next grasp, no attempt burned
-        if not _move(demo, arm, grasp, approach, execute, moveit_py, "straddle", axis=axis):
-            demo.set_object_collision(False)
-            gi += 1; per_grasp = 0; continue
+            ci += 1; per_grasp = 0; continue   # plan failure: next chain, no attempt burned
         # At the straddle pose now; clear the obstacle so PHASE 2 (closing the
         # fingers onto the object) and the lift aren't blocked by it.
         demo.set_object_collision(False)
@@ -961,8 +1114,8 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
                 # SAME grasp at the adjusted force (down after an eject, up after
                 # a weak grip) for a few steps before moving to the next grasp.
                 if per_grasp < PER_GRASP_TRIES:
-                    continue                      # same gi -> retry this grasp
-                gi += 1
+                    continue                      # same chain -> retry this grasp
+                ci += 1
                 per_grasp = 0
                 continue
             demo.get_logger().info(
