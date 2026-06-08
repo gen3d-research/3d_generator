@@ -76,8 +76,12 @@ def main():
                    default=ROOT / "output" / "eval_manifest.json")
     p.add_argument("--export-root", type=Path,
                    default=ROOT / "output" / "manifest_objects")
-    p.add_argument("--n-grasps", type=int, default=5,
-                   help="Grasp candidates per object")
+    p.add_argument("--n-grasps", type=int, default=12,
+                   help="Grasp candidates per object. Keep a DIVERSE set (not just "
+                        "the top few by geometric score) so the demo's runtime "
+                        "reachability filter has reachable approaches to choose "
+                        "from — e.g. a low side grasp may collide while a "
+                        "lower-scored top-down grasp is the only reachable one.")
     args = p.parse_args()
 
     # Mesh collision (not convex hull, not simplified) so the object's collision

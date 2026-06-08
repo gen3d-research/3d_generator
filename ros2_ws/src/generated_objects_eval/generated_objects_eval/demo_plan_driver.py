@@ -865,6 +865,7 @@ def _reachable_chains(demo, moveit_py, cands, n_seeds: int = 4):
     seeds = seeds[:n_seeds]
 
     def _ik(pose, seed):
+        """Return (q, reason): q on success (reason None), else (None, 'ik'|'collision')."""
         rsx = RobotState(rm)
         rsx.set_joint_group_positions("panda_arm", np.asarray(seed, float))
         if hand is not None:
@@ -874,34 +875,46 @@ def _reachable_chains(demo, moveit_py, cands, n_seeds: int = 4):
                 pass
         rsx.update()
         if not rsx.set_from_ik("panda_arm", pose, "panda_link8", timeout=0.1):
-            return None
+            return None, "ik"
         rsx.update()
         try:
             with psm.read_only() as scene:
                 if not scene.is_state_valid(rsx, "panda_arm"):
-                    return None
+                    return None, "collision"
         except Exception:
             pass                          # validity unavailable -> let planning catch it
-        return np.asarray(rsx.get_joint_group_positions("panda_arm"), float)
+        return np.asarray(rsx.get_joint_group_positions("panda_arm"), float), None
 
     out = []
     for idx, c in enumerate(cands):
         best = None
+        why = "grasp-ik"          # most-advanced failure reason seen for this candidate
         for seed in seeds:
-            gq = _ik(c["grasp_pose"], seed)
+            gq, r = _ik(c["grasp_pose"], seed)
             if gq is None:
+                why = "grasp-" + r if why == "grasp-ik" else why
                 continue
-            pq = _ik(c["pre_pose"], gq)   # seed pre-grasp FROM the grasp config
+            pq, r = _ik(c["pre_pose"], gq)   # seed pre-grasp FROM the grasp config
             if pq is None:
+                why = "pre-" + r
                 continue
             descent = float(np.linalg.norm(gq - pq))
             plann = min(_limit_margin(gq), _limit_margin(pq)) * \
                 float(np.clip(1.0 - descent / 2.0, 0.2, 1.0))
             if best is None or plann > best[2]:
                 best = (pq, gq, plann)
+        appr = c["approach"]
+        kind = "top-down" if appr[2] < -0.6 else "side"
         if best is not None:
             out.append({"idx": idx, "pre_q": best[0], "grasp_q": best[1],
                         "combined": (c["geo"] + 0.05) * best[2]})
+            demo.get_logger().info(
+                f"    cand#{idx} {kind} w={c['g'].get('width', 0) * 1000:.0f}mm "
+                f"geo={c['geo']:.2f} -> REACHABLE (plann={best[2]:.2f})")
+        else:
+            demo.get_logger().info(
+                f"    cand#{idx} {kind} w={c['g'].get('width', 0) * 1000:.0f}mm "
+                f"geo={c['geo']:.2f} -> unreachable ({why})")
     out.sort(key=lambda d: -d["combined"])
     return out
 
@@ -975,7 +988,8 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
 
     # ---- Pre-pass: per-candidate geometry (rotation to settled pose + insertion
     # clamp) and grasp/pre-grasp poses for the top candidates. ----
-    TOPK = min(len(grasps), max(6, max_grasp_tries))
+    TOPK = min(len(grasps), max(12, max_grasp_tries))   # evaluate a diverse set so a
+    #   reachable approach (e.g. top-down) isn't truncated by geometric rank
     cands = []
     for g in grasps[:TOPK]:
         # center/approach/axis are in the OBJECT frame; rotate to the settled pose.
