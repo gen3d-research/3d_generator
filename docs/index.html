@@ -250,9 +250,9 @@
         <div class="column is-6">
           <div class="box">
             <h3 class="title is-5"><span class="pillar-tag" style="background:#2196F3;">1</span> Parametric primitives</h3>
-            <p>Each object is a union of primitives drawn from <strong>13 types</strong> (box, cylinder,
-            sphere, capsule, cone, pyramid, torus, ellipsoid, wedge, plus a hollow shell and a handle for
-            realistic containers) with rigid transforms. Mass, COM, and inertia are closed-form or
+            <p>Each object is a union of primitives drawn from <strong>14 types</strong> (box, cylinder,
+            sphere, capsule, cone, pyramid, torus, ellipsoid, wedge, plus a hollow shell, handle, frustum,
+            hemisphere, and hex prism for realistic containers, tapers, domes, and fasteners) with rigid transforms. Mass, COM, and inertia are closed-form or
             mesh-derived, so every exported asset ships with physically consistent inertial properties.</p>
           </div>
         </div>
@@ -300,7 +300,7 @@
     <div class="container is-max-desktop">
       <h2 class="title is-3 has-text-centered">Shape library &amp; limitations</h2>
       <p class="has-text-centered" style="max-width:760px;margin:0 auto 1.5rem;">
-        Objects are assembled from 13 primitive types. Each row below varies one type to show its
+        Objects are assembled from 14 primitive types. Each row below varies one type to show its
         <em>degrees of freedom</em> &mdash; how many independent shape parameters it has (a sphere has
         one, a box has three). The newest two &mdash; a <strong>hollow shell</strong> and a
         <strong>handle</strong> &mdash; were added from this audit to make mugs, cups, and pots real
@@ -309,7 +309,7 @@
         <div class="column is-two-thirds">
           <div class="figure-container">
             <img src="./static/images/primitives.png" alt="Primitive gallery">
-            <p class="figure-caption">The 13 primitive types, each shown with variants that exercise its
+            <p class="figure-caption">The 14 primitive types, each shown with variants that exercise its
               degrees of freedom.</p>
           </div>
         </div>

@@ -24,7 +24,7 @@ from pathlib import Path
 from primitives import (
     CompositeObject, Primitive, Box, Cylinder, Sphere, Capsule,
     Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle, Frustum, Hemisphere,
-    Transform, PrimitiveType, seat_height, half_extents,
+    HexPrism, Transform, PrimitiveType, seat_height, half_extents,
 )
 from scoring import ObjectScorer, ScoreBreakdown, ScoringConfig
 
@@ -132,13 +132,60 @@ PRIMITIVE_SPECS: List[PrimitiveSpec] = [
                   np.array([0.012]), np.array([0.08]),
                   build=lambda p, t: Hemisphere(radius=p[0], transform=t),
                   extract=lambda pr: np.array([pr.radius])),
+    PrimitiveSpec(PrimitiveType.HEX_PRISM, ['radius', 'height'],
+                  _log(0.018, 0.012), np.array([0.3, 0.3]),
+                  np.array([0.006, 0.004]), np.array([0.04, 0.05]),
+                  build=lambda p, t: HexPrism(radius=p[0], height=p[1], transform=t),
+                  extract=lambda pr: np.array([pr.radius, pr.height])),
 ]
 
 # Default type bias: favor box/cylinder slightly, rest uniform.
-_DEFAULT_TYPE_WEIGHTS = np.ones(len(PRIMITIVE_SPECS))
-_DEFAULT_TYPE_WEIGHTS[0] = 2.0   # box
-_DEFAULT_TYPE_WEIGHTS[1] = 1.5   # cylinder
 _SPEC_INDEX = {s.ptype: i for i, s in enumerate(PRIMITIVE_SPECS)}
+
+# Initial per-type sampling weights (robust to spec ordering). Boxes/cylinders are
+# the bread-and-butter building blocks; the handle/torus are ACCESSORY shapes that
+# read as standalone objects poorly (a lone C-arc), so they start rare. The CEM
+# still adapts these from the elites, but the per-type cap below keeps any one type
+# (notably the very-graspable handle) from taking over the distribution.
+_DEFAULT_TYPE_WEIGHTS = np.ones(len(PRIMITIVE_SPECS))
+_TYPE_INIT_WEIGHT = {
+    PrimitiveType.BOX: 2.0, PrimitiveType.CYLINDER: 1.5,
+    PrimitiveType.TORUS: 0.7, PrimitiveType.HANDLE: 0.5,
+}
+for _ti, _w in _TYPE_INIT_WEIGHT.items():
+    if _ti in _SPEC_INDEX:
+        _DEFAULT_TYPE_WEIGHTS[_SPEC_INDEX[_ti]] = _w
+
+# No single primitive type may exceed this share of the learned distribution —
+# preserves diversity so the CEM doesn't collapse onto one favourite type.
+_MAX_TYPE_PROB = 0.18
+
+
+def _cap_type_probs(probs: np.ndarray, cap: float = _MAX_TYPE_PROB) -> np.ndarray:
+    """Cap each type's probability at ``cap``, water-filling the excess only into
+    types that already carry mass (so EXCLUDED types stay at zero — important for
+    the v1 paper_repro palette). No-ops when <=4 types are active (the v1 case)."""
+    p = np.asarray(probs, dtype=float).copy()
+    s = p.sum()
+    if s <= 0:
+        return p
+    p = p / s
+    active = p > 1e-9                      # excluded (zero) types must stay excluded
+    if int(active.sum()) <= 4:             # v1 4-type repro: leave it alone
+        return p
+    for _ in range(8):
+        over = p > cap
+        if not over.any():
+            break
+        excess = float((p[over] - cap).sum())
+        p[over] = cap
+        room_mask = active & (p < cap)
+        room = p[room_mask]
+        if room.sum() <= 1e-12:
+            break
+        p[room_mask] = p[room_mask] + excess * room / room.sum()
+    t = p.sum()
+    return p / t if t > 0 else p
 
 # Floors so learned spread never collapses to zero.
 _OFFSET_STD_FLOOR = 0.005
@@ -454,7 +501,8 @@ class CEMOptimizer:
         if ptype_counts.sum() > 0:
             new_probs = ptype_counts / ptype_counts.sum()
             new_probs = (new_probs + 0.01) / (new_probs + 0.01).sum()
-            dist.primitive_type_probs = lr * new_probs + (1 - lr) * dist.primitive_type_probs
+            dist.primitive_type_probs = _cap_type_probs(
+                lr * new_probs + (1 - lr) * dist.primitive_type_probs)
 
         # Per-type size parameters (log-space)
         for ti, spec in enumerate(PRIMITIVE_SPECS):

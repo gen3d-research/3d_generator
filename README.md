@@ -100,7 +100,7 @@ Two knobs control how many objects flow through the pipeline:
 ## How It Works
 
 ### 1. Parametric Object Representation
-Objects are compositions of **13 primitive types** (the 9 base shapes plus v2.2 hollow-shell + handle and v2.3 frustum + hemisphere for realistic containers, handles, tapers, and domes) with rigid transforms. This keeps generation fast and interpretable. See the [**Shape Library & Limitations**](#shape-library--limitations) section below for the full gallery, parameters, and a fidelity audit.
+Objects are compositions of **14 primitive types** (the 9 base shapes plus v2.2 hollow-shell + handle, v2.3 frustum + hemisphere, and v2.5 hex-prism for realistic containers, handles, tapers, domes, and fasteners) with rigid transforms. This keeps generation fast and interpretable. See the [**Shape Library & Limitations**](#shape-library--limitations) section below for the full gallery, parameters, and a fidelity audit.
 
 ### 2. Constraint-Based Scoring
 Each object is scored on manipulation-relevant criteria:
@@ -133,7 +133,7 @@ Generated objects are exported with:
 
 ## Shape Library & Limitations
 
-The generator assembles objects from **13 primitive types**. Each row below varies
+The generator assembles objects from **14 primitive types**. Each row below varies
 one type to show its **degrees of freedom** (DOF) — how many independent shape
 parameters it has (sphere = 1, box = 3):
 
@@ -154,6 +154,7 @@ parameters it has (sphere = 1, box = 3):
 | **handle** ✨ | 4 | major, tube_a, tube_b, arc | C-shaped elliptical-tube arc |
 | **frustum** ✨ | 3 | r_bot, r_top, height | flared / truncated cone |
 | **hemisphere** ✨ | 1 | radius | dome / scoop |
+| **hex_prism** ✨ | 2 | radius, height | hex nut / bolt head |
 
 ### Faked shapes → missing primitives
 
@@ -163,7 +164,7 @@ solid or full-ring stand-in — a mug body was a *solid* cylinder, a cup handle 
 *full* torus. **v2.2 added `hollow_shell` + `handle`** and **v2.3 added `frustum`
 + `hemisphere`**, so mug/cup/pot/teapot/jar/bowl are now real hollow vessels with
 C-handles, and plunger/trophy/ladle have proper flared cups and dome scoops (see
-the archetype gallery). Only the hex fastener remains.
+the archetype gallery). All five audit-proposed primitives are now built.
 
 | Faked feature | Old stand-in | Archetypes | Primitive | Status |
 |---|---|---|---|---|
@@ -171,7 +172,7 @@ the archetype gallery). Only the hex fastener remains.
 | C-shaped handle | full torus / straight cylinder | mug, cup, pot, teapot | **Handle / arc** | ✅ built |
 | flared / truncated taper | solid cone (apex) | plunger, trophy, buckets | **Frustum** | ✅ built |
 | dome / scoop | solid sphere / capsule | ladle, lids, domes | **Hemisphere** | ✅ built |
-| hex fastener | round cylinder / pyramid | nut, bolt | **n-gon prism** | proposed |
+| hex fastener | round cylinder / pyramid | nut, bolt | **Hex prism** | ✅ built |
 
 ➡️ **Full gallery, math, per-type limitations, accepted/rejected/optimized sample
 galleries, and ready-to-implement design sketches for the proposed primitives are

@@ -11,7 +11,7 @@ import pytest
 import primitives as P
 from primitives import (
     Box, Cylinder, Sphere, Capsule, Cone, Pyramid, Torus, Ellipsoid, Wedge,
-    HollowShell, Handle, Frustum, Hemisphere, Transform, seat_height,
+    HollowShell, Handle, Frustum, Hemisphere, HexPrism, Transform, seat_height,
 )
 from archetypes import ARCHETYPE_REGISTRY
 from scoring import ObjectScorer, ScoringConfig
@@ -38,6 +38,7 @@ PRIMS = {
                      arc_angle=1.5 * np.pi),
     "frustum": Frustum(radius_bottom=0.04, radius_top=0.025, height=0.06),
     "hemisphere": Hemisphere(radius=0.03),
+    "hex_prism": HexPrism(radius=0.018, height=0.012),
 }
 
 

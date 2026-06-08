@@ -30,6 +30,8 @@ class PrimitiveType(Enum):
     # v2.3 additions — tapered/domed shapes.
     FRUSTUM = "frustum"
     HEMISPHERE = "hemisphere"
+    # v2.5 addition — faceted fastener.
+    HEX_PRISM = "hex_prism"
 
 
 @dataclass
@@ -568,6 +570,30 @@ class Hemisphere(Primitive):
 
     def volume(self) -> float:
         return float(2.0 / 3.0 * np.pi * self.radius ** 3)
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+@dataclass
+class HexPrism(Primitive):
+    """Regular hexagonal prism — for hex nuts and bolt heads (a round cylinder or
+    4-gon pyramid is the wrong shape for a fastener). +Z axis, ``radius`` is the
+    circumradius (centre-to-corner); centered on its centroid."""
+    radius: float = 0.018
+    height: float = 0.012
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.HEX_PRISM)
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        mesh = trimesh.creation.cylinder(radius=self.radius, height=self.height,
+                                         sections=6)  # already centred on origin
+        mesh.apply_transform(self.transform.as_matrix())
+        return mesh
+
+    def volume(self) -> float:
+        return float(1.5 * np.sqrt(3.0) * self.radius ** 2 * self.height)
 
     def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
         return self._mesh_inertia(density)

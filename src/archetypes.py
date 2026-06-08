@@ -21,7 +21,7 @@ from typing import Callable, Dict
 from primitives import (
     CompositeObject, Box, Cylinder, Sphere, Capsule,
     Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle, Frustum, Hemisphere,
-    seat_height, Transform,
+    HexPrism, seat_height, Transform,
     # existing v1 factories (registered below)
     create_small_box, create_tall_box, create_flat_box, create_mug_like,
     create_l_shape, create_dumbbell, create_hammer, create_bottle,
@@ -133,6 +133,11 @@ def _hemi(r, x=0.0, y=0.0, z=None, euler=None):
     z = seat_height(p) if z is None else z
     p.transform = _T(x, y, z, euler)
     return p
+
+
+def _hex(r, h, x=0.0, y=0.0, z=None, euler=None):
+    z = h / 2 if z is None else z
+    return HexPrism(radius=r, height=h, transform=_T(x, y, z, euler))
 
 
 def _ell(rx, ry, rz, x=0.0, y=0.0, z=None, euler=None):
@@ -610,15 +615,15 @@ def create_binder_ring(R: float = 0.03, spine_h: float = 0.10) -> CompositeObjec
 @archetype("bolt")
 def create_bolt(shaft_r: float = 0.008, shaft_h: float = 0.06,
                 head_r: float = 0.016) -> CompositeObject:
-    head = _pyr(head_r, 0.012)
+    head = _hex(head_r, 0.012)                         # hex bolt head, not a pyramid
     shaft = _cyl(shaft_r, shaft_h, z=0.012 / 2 + shaft_h / 2 - 0.003)
     return _co("bolt", head, shaft)
 
 
 @archetype("nut")
 def create_nut(r: float = 0.018, h: float = 0.012, hole_r: float = 0.007) -> CompositeObject:
-    body = _cyl(r, h)
-    ring = _tor(r * 0.7, 0.004, z=h / 2)
+    body = _hex(r, h)                                  # hex flats, not a round cylinder
+    ring = _tor(r * 0.6, 0.004, z=h / 2)               # threaded-hole rim
     return _co("nut", body, ring)
 
 

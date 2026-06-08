@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from primitives import (Box, Cylinder, Sphere, Capsule, Cone, Pyramid,  # noqa: E402
                         Torus, Ellipsoid, Wedge, HollowShell, Handle,
-                        Frustum, Hemisphere)
+                        Frustum, Hemisphere, HexPrism)
 from cem import PRIMITIVE_SPECS                                          # noqa: E402
 from _render_common import grid                                         # noqa: E402
 
@@ -104,6 +104,11 @@ GALLERY = [
         ("r=20", Hemisphere(radius=0.020)),
         ("r=35", Hemisphere(radius=0.035)),
         ("r=55", Hemisphere(radius=0.055)),
+    ]),
+    ("HexPrism  (2 DOF: radius, height)", [
+        ("nut r18 h12", HexPrism(radius=0.018, height=0.012)),
+        ("bolt-head r16 h10", HexPrism(radius=0.016, height=0.010)),
+        ("post r12 h40", HexPrism(radius=0.012, height=0.040)),
     ]),
 ]
 

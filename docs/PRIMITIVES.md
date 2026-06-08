@@ -1,6 +1,6 @@
 # Primitive & Archetype Library — gallery, math, and fidelity audit
 
-This document (a) catalogs the **13 primitive types** the generator builds objects
+This document (a) catalogs the **14 primitive types** the generator builds objects
 from — with a picture, parameters, degrees of freedom (DOF), clamp ranges, math,
 and **limitations**; (b) audits the hand-written **archetypes** to show which
 real-world shapes are currently *faked* because the primitive set is too small;
@@ -48,9 +48,11 @@ clamped to `[min, max]`):
 | handle ✨ | 4 | major, tube_a, tube_b, arc | 0.02, 0.006, 0.005, 4.71 | 0.01, 0.003, 0.003, 1.88 | 0.05, 0.012, 0.012, 5.97 |
 | frustum ✨ | 3 | r_bot, r_top, height | 0.04, 0.025, 0.06 | 0.008, 0.005, 0.02 | 0.08, 0.08, 0.14 |
 | hemisphere ✨ | 1 | radius | 0.03 | 0.012 | 0.08 |
+| hex_prism ✨ | 2 | radius, height | 0.018, 0.012 | 0.006, 0.004 | 0.04, 0.05 |
 
-**Total: 32 sampled shape parameters across 13 types** (✨ = the audit-driven
-additions: v2.2 hollow_shell + handle, v2.3 frustum + hemisphere). Each primitive also
+**Total: 34 sampled shape parameters across 14 types** (✨ = the audit-driven
+additions: v2.2 hollow_shell + handle, v2.3 frustum + hemisphere, v2.5 hex_prism).
+Each primitive also
 carries a 6-DOF `Transform` (position + orientation) set during composition.
 
 ### Math & construction (per type)
@@ -73,6 +75,7 @@ carries a 6-DOF `Transform` (position + orientation) set during composition.
 | **Handle** ✨ | `π·a·b·R·arc` | manual elliptical-tube sweep along a circular arc, fan-capped | `_mesh_inertia` |
 | **Frustum** ✨ | `π h/3 (r₀²+r₀r₁+r₁²)` | cone **intersected** with a clip box at z=H (CSG) | `_mesh_inertia` |
 | **Hemisphere** ✨ | `2/3 π r³` | `icosphere` **intersected** with the z≥0 half-space (CSG) | `_mesh_inertia` |
+| **HexPrism** ✨ | `3√3/2 · r² h` | `cylinder(sections=6)` | `_mesh_inertia` |
 
 ### Limitations (what each type **cannot** represent)
 
@@ -208,10 +211,11 @@ Adding any of these is the standard two-step: a `@dataclass` subclass in
 `PRIMITIVE_SPECS` row in `cem.py` + a `PrimitiveType` enum entry, then a `_helper`
 in `archetypes.py` and a rewrite of the affected archetypes.
 
-> **Status:** 4.1–4.4 are now **IMPLEMENTED** — hollow shell + handle (v2.2),
-> frustum + hemisphere (v2.3) — see `primitives.py`, the `PRIMITIVE_SPECS` rows in
-> `cem.py`, and the rewired archetypes (`mug_like`/`cup`/`pot`/`teapot`/`jar`/`bowl`
-> + `plunger`/`trophy`/`ladle`). Only 4.5 (hex prism) remains a proposal.
+> **Status: ALL FIVE proposals are now IMPLEMENTED** — hollow shell + handle
+> (v2.2), frustum + hemisphere (v2.3), hex prism (v2.5) — see `primitives.py`, the
+> `PRIMITIVE_SPECS` rows in `cem.py`, and the rewired archetypes
+> (`mug_like`/`cup`/`pot`/`teapot`/`jar`/`bowl` + `plunger`/`trophy`/`ladle` +
+> `nut`/`bolt`). The primitive set went 9 → 14.
 
 ### 4.1 Hollow shell / open container  ★ ✅ IMPLEMENTED
 - **Replaces:** solid-cylinder bodies of `mug_like`, `cup`, `pot`, `jar`, `bowl`; extends to `teapot`/`wine_glass` (round variant) and `funnel` (open cone).
@@ -249,7 +253,7 @@ in `archetypes.py` and a rewrite of the affected archetypes.
 - **Spec row template:** `['radius']`, defaults `_log(0.04)`, clamp `[0.012]…[0.08]`.
 - **Risk:** minimal; it's a clipped sphere of revolution.
 
-### 4.5 n-gon prism (hex)  ▫ low impact
+### 4.5 n-gon prism (hex)  ▫ ✅ IMPLEMENTED
 - **Replaces:** `nut` body, `bolt` head (currently round cylinder / 4-gon pyramid).
 - **Params (2 DOF + fixed n):** `radius`, `height` (n=6 hex by default).
 - **Math:** regular-polygon prism `V = ½ n r² sin(2π/n)·h`; analytic or `_mesh_inertia`.
@@ -266,8 +270,8 @@ in `archetypes.py` and a rewrite of the affected archetypes.
 | Handle / arc | 4 | mug, cup, pot, teapot | manual elliptical-tube sweep | ✅ **built (v2.2)** |
 | Frustum | 3 | plunger, trophy, buckets, flowerpots | cone ∩ clip box (CSG) | ✅ **built (v2.3)** |
 | Hemisphere | 1 | ladle, lids, domes | sphere ∩ half-space (CSG) | ✅ **built (v2.3)** |
-| Hex prism | 2 | nut, bolt | `cylinder(sections=6)` | proposed |
+| Hex prism | 2 | nut, bolt | `cylinder(sections=6)` | ✅ **built (v2.5)** |
 
 **Done:** v2.2 hollow shell + handle (mug/cup/pot/teapot/jar/bowl) and v2.3
 frustum + hemisphere (plunger/trophy/ladle) — all rebuilt and connected; see the
-archetype gallery. **Remaining proposal:** the hex prism (cosmetic, for fasteners).
+archetype gallery. **All five proposals are now built** — the audit is fully closed.
