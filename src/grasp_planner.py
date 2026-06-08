@@ -469,11 +469,18 @@ def _score_grasp(g: Grasp, ctx: _GeomCtx, gripper: GripperSpec,
     # above that.
     try:
         zlo, zhi = float(ctx.union.bounds[0][2]), float(ctx.union.bounds[1][2])
-        z_frac = (g.center[2] - zlo) / (zhi - zlo + 1e-9)
+        height = zhi - zlo
+        z_frac = (g.center[2] - zlo) / (height + 1e-9)
     except Exception:
-        z_frac = 1.0
+        zlo, zhi, height, z_frac = 0.0, 1.0, 1.0, 1.0
     base_ok = float(np.clip(z_frac / 0.15, 0.3, 1.0))
-    return score * close_ok * base_ok
+    # Hang-stability gate: when lifted, the object pivots about the grip. If the
+    # grip is BELOW the CoM, the CoM is an inverted pendulum and flips over (can
+    # break the grasp); if the grip is at/above the CoM, it hangs stably. dz>0
+    # means grip above CoM (good). Penalize grip-below-CoM, full credit above.
+    dz = (g.center[2] - ctx.com[2]) / (height + 1e-9)
+    stable_ok = float(np.clip(1.0 + 2.0 * dz, 0.3, 1.0))
+    return score * close_ok * base_ok * stable_ok
 
 
 # ---------------------------------------------------------------------------
