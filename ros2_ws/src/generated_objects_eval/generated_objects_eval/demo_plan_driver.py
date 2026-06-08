@@ -515,7 +515,10 @@ class DemoNode(Node):
             else:
                 size = np.asarray(extents if extents is not None else [0.05] * 3, float)
                 ctr_local = np.zeros(3)
-            size = np.maximum(size * 0.9, 0.005)
+            # Shrink to ~the object's core: covers the bulk the wrist must avoid,
+            # while leaving the fingertips (at the real surface, near the AABB
+            # boundary) outside so the grasp pose still plans with the box ON.
+            size = np.maximum(size * 0.8, 0.005)
             base = np.zeros(3) if base is None else np.asarray(base, float)
             quat = np.array([0.0, 0.0, 0.0, 1.0]) if quat is None else np.asarray(quat, float)
             ctr_world = base + _rotate(quat, ctr_local)
@@ -814,16 +817,21 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
 
         if execute:
             demo.set_finger_effort(demo.open_eff)
-        # Collision-aware approach: make the object an obstacle while moving to
-        # the pre-grasp (so the arm routes AROUND it instead of knocking it),
-        # then remove it for the short local descent into finger contact.
+        # Collision-aware approach AND descent: keep the object as an obstacle
+        # through BOTH the pre-grasp move and the descent into the grasp, so the
+        # hand/wrist (the "root" of the gripper) routes around the object and
+        # never drives into it. The box is shrunk so the FINGERTIPS (at the real
+        # surface) still reach the grasp; the bulk the wrist must avoid stays
+        # covered. Removed only once the gripper is at the grasp (before squeeze
+        # + lift, when the object is between the fingers).
         demo.set_object_collision(True, base, base_quat, extents, aabb)
-        approached = _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis)
-        demo.set_object_collision(False)
-        if not approached:
+        if not _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis):
+            demo.set_object_collision(False)
             gi += 1; per_grasp = 0; continue   # plan failure: next grasp, no attempt burned
         if not _move(demo, arm, grasp, approach, execute, moveit_py, "grasp", axis=axis):
+            demo.set_object_collision(False)
             gi += 1; per_grasp = 0; continue
+        demo.set_object_collision(False)       # at the grasp now; clear the obstacle
         attempts += 1   # both poses planned -> this is a real grasp attempt
         per_grasp += 1
 

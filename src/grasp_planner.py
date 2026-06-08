@@ -457,7 +457,17 @@ def _score_grasp(g: Grasp, ctx: _GeomCtx, gripper: GripperSpec,
     # grasp at the CoM never beats a narrower one. (Full credit at <=65% of max.)
     margin_frac = (gripper.width_max - g.width) / (gripper.width_max + 1e-9)
     close_ok = float(np.clip(margin_frac / 0.35, 0.15, 1.0))
-    return score * close_ok
+    # Base gate: grasps near the object's bottom sit at the table — unstable and
+    # prone to finger/table contact. Penalize the lowest ~15% of the height
+    # (objects are exported seated, so union z runs base(0) -> top). Full credit
+    # above that.
+    try:
+        zlo, zhi = float(ctx.union.bounds[0][2]), float(ctx.union.bounds[1][2])
+        z_frac = (g.center[2] - zlo) / (zhi - zlo + 1e-9)
+    except Exception:
+        z_frac = 1.0
+    base_ok = float(np.clip(z_frac / 0.15, 0.3, 1.0))
+    return score * close_ok * base_ok
 
 
 # ---------------------------------------------------------------------------
