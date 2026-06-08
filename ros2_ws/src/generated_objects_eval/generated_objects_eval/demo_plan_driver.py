@@ -38,7 +38,7 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import JointState
-from shape_msgs.msg import SolidPrimitive
+from shape_msgs.msg import SolidPrimitive, Mesh, MeshTriangle
 from std_msgs.msg import ColorRGBA, Header, Float64MultiArray
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from visualization_msgs.msg import Marker, MarkerArray
@@ -226,6 +226,7 @@ class DemoNode(Node):
         # the way to 0 (missed it).
         self._finger_pos = None
         self._arm_q = None    # latest 7 arm-joint positions (to seed Cartesian-descent IK)
+        self._mesh_cache = {}  # collision-mesh path -> shape_msgs/Mesh
         self.create_subscription(JointState, "/joint_states", self._js_cb, 10)
 
         # Finger EFFORT command (forward_command_controller): [f1, f2].
@@ -500,12 +501,32 @@ class DemoNode(Node):
         scene.world.collision_objects = [co]
         self.planning_scene_pub.publish(scene)
 
+    def _collision_mesh_msg(self, mesh_path):
+        """Load the object's REAL collision mesh as a shape_msgs/Mesh (cached).
+        Returns None on failure (caller falls back to a box)."""
+        if mesh_path in self._mesh_cache:
+            return self._mesh_cache[mesh_path]
+        msg = None
+        try:
+            import trimesh
+            tm = trimesh.load(mesh_path, force="mesh")
+            msg = Mesh()
+            msg.vertices = [Point(x=float(v[0]), y=float(v[1]), z=float(v[2]))
+                            for v in np.asarray(tm.vertices, float)]
+            msg.triangles = [MeshTriangle(vertex_indices=[int(f[0]), int(f[1]), int(f[2])])
+                             for f in np.asarray(tm.faces)]
+        except Exception as exc:
+            self.get_logger().warn(f"collision mesh load failed ({exc}); using box")
+            msg = None
+        self._mesh_cache[mesh_path] = msg
+        return msg
+
     def set_object_collision(self, present: bool, base=None, quat=None,
-                             extents=None, aabb=None):
+                             extents=None, aabb=None, mesh_path=None):
         """Add/remove the spawned object as a MoveIt collision obstacle (id
-        'demo_object') so the arm plans AROUND it during approach instead of
-        knocking it. A box from the object's AABB at its settled pose; shrunk
-        slightly so the local pre-grasp near the surface isn't over-blocked."""
+        'demo_object') so the arm — including the hand/wrist — plans AROUND it.
+        Uses the REAL collision mesh (so the fingers can enter concavities like a
+        figure-8 neck); falls back to the AABB box if the mesh can't be loaded."""
         co = CollisionObject()
         co.header.frame_id = "panda_link0"
         co.header.stamp = self.get_clock().now().to_msg()
@@ -514,35 +535,39 @@ class DemoNode(Node):
             co.operation = CollisionObject.REMOVE
         else:
             co.operation = CollisionObject.ADD
-            if aabb is not None:
-                amin = np.asarray(aabb[0], float)
-                amax = np.asarray(aabb[1], float)
-                size = amax - amin
-                ctr_local = 0.5 * (amin + amax)
-            else:
-                size = np.asarray(extents if extents is not None else [0.05] * 3, float)
-                ctr_local = np.zeros(3)
-            # Slightly shrink so the pre-grasp (just outside the object) still
-            # plans, while the box covers the object for the approach traverse.
-            size = np.maximum(size * 0.9, 0.005)
             base = np.zeros(3) if base is None else np.asarray(base, float)
             quat = np.array([0.0, 0.0, 0.0, 1.0]) if quat is None else np.asarray(quat, float)
-            ctr_world = base + _rotate(quat, ctr_local)
-            prim = SolidPrimitive()
-            prim.type = SolidPrimitive.BOX
-            prim.dimensions = [float(size[0]), float(size[1]), float(size[2])]
-            co.primitives = [prim]
             pose = Pose()
-            pose.position.x, pose.position.y, pose.position.z = map(float, ctr_world)
             pose.orientation = Quaternion(x=float(quat[0]), y=float(quat[1]),
                                           z=float(quat[2]), w=float(quat[3]))
-            co.primitive_poses = [pose]
+            mesh_msg = self._collision_mesh_msg(mesh_path) if mesh_path else None
+            if mesh_msg is not None:
+                # Mesh is in the object frame; place it at the settled pose.
+                pose.position.x, pose.position.y, pose.position.z = map(float, base)
+                co.meshes = [mesh_msg]
+                co.mesh_poses = [pose]
+            else:
+                if aabb is not None:
+                    amin, amax = np.asarray(aabb[0], float), np.asarray(aabb[1], float)
+                    size = amax - amin
+                    ctr_local = 0.5 * (amin + amax)
+                else:
+                    size = np.asarray(extents if extents is not None else [0.05] * 3, float)
+                    ctr_local = np.zeros(3)
+                size = np.maximum(size, 0.005)
+                ctr_world = base + _rotate(quat, ctr_local)
+                prim = SolidPrimitive()
+                prim.type = SolidPrimitive.BOX
+                prim.dimensions = [float(size[0]), float(size[1]), float(size[2])]
+                co.primitives = [prim]
+                pose.position.x, pose.position.y, pose.position.z = map(float, ctr_world)
+                co.primitive_poses = [pose]
         scene = PlanningScene()
         scene.is_diff = True
         scene.world = PlanningSceneWorld()
         scene.world.collision_objects = [co]
         self.planning_scene_pub.publish(scene)
-        time.sleep(0.15)   # let the planning-scene monitor apply the diff before planning
+        time.sleep(0.2)   # let the planning-scene monitor apply the diff before planning
 
     def publish_object(self, pose: Pose, extents: np.ndarray,
                        attached_to_link: Optional[str] = None,
@@ -865,19 +890,26 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
             f"score={g.get('score', 0.0):.2f}, approach_z={approach[2]:+.2f}, "
             f"width={g.get('width', 0.0) * 1000:.0f}mm)")
 
+        # PHASE 1 (arm): open the fingers, then move so the OPEN gripper straddles
+        # the object — fingertips on either side, object in the gap (no contact).
+        # The object's REAL collision mesh is in the planning scene through BOTH
+        # the pre-grasp move AND the descent, so MoveIt routes the hand/wrist
+        # AROUND it the whole way (the root no longer rams the object). With the
+        # fingers open the straddle pose is collision-free, so the plan succeeds.
         if execute:
             demo.set_finger_effort(demo.open_eff)
-        # Collision-aware approach: object is an obstacle while moving to the
-        # pre-grasp (route AROUND it). Removed for the descent, which is a
-        # CARTESIAN straight line (see _cartesian_descent) so the hand/wrist
-        # follows the fingers straight in and never swings into the object.
-        demo.set_object_collision(True, base, base_quat, extents, aabb)
-        approached = _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis)
-        demo.set_object_collision(False)
-        if not approached:
+            time.sleep(0.8)   # let the fingers fully OPEN before planning the straddle
+        demo.set_object_collision(True, base, base_quat, extents, aabb,
+                                  mesh_path=entry.get("collision_mesh"))
+        if not _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis):
+            demo.set_object_collision(False)
             gi += 1; per_grasp = 0; continue   # plan failure: next grasp, no attempt burned
-        if not _cartesian_descent(demo, arm, moveit_py, pre, grasp, approach, axis, execute):
+        if not _move(demo, arm, grasp, approach, execute, moveit_py, "straddle", axis=axis):
+            demo.set_object_collision(False)
             gi += 1; per_grasp = 0; continue
+        # At the straddle pose now; clear the obstacle so PHASE 2 (closing the
+        # fingers onto the object) and the lift aren't blocked by it.
+        demo.set_object_collision(False)
         attempts += 1   # reached the grasp -> this is a real grasp attempt
         per_grasp += 1
 
