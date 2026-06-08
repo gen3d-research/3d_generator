@@ -241,6 +241,11 @@ def _launch_setup(context):
             executable="create",
             output="screen",
             arguments=[
+                # Pin the target world: without -world, `create` auto-picks a
+                # world, so a second gz sim on the shared transport (e.g. a stray
+                # PX4/drone sim) hijacks the spawn and the Panda never appears in
+                # panda_eval_world.
+                "-world", "panda_eval_world",
                 "-name", "panda",
                 "-topic", "/robot_description",
                 "-x", "0", "-y", "0", "-z", "0",
