@@ -100,7 +100,7 @@ Two knobs control how many objects flow through the pipeline:
 ## How It Works
 
 ### 1. Parametric Object Representation
-Objects are compositions of **14 primitive types** (the 9 base shapes plus v2.2 hollow-shell + handle, v2.3 frustum + hemisphere, and v2.5 hex-prism for realistic containers, handles, tapers, domes, and fasteners) with rigid transforms. This keeps generation fast and interpretable. See the [**Shape Library & Limitations**](#shape-library--limitations) section below for the full gallery, parameters, and a fidelity audit.
+Objects are compositions of **16 primitive types** (the 9 base shapes plus v2.2 hollow-shell + handle, v2.3 frustum + hemisphere, v2.5 hex-prism, and v2.6 open-tube + n-gon prism) with rigid transforms. This keeps generation fast and interpretable. See the [**Shape Library & Limitations**](#shape-library--limitations) section below for the full gallery, parameters, and a fidelity audit.
 
 ### 2. Constraint-Based Scoring
 Each object is scored on manipulation-relevant criteria:
@@ -133,7 +133,7 @@ Generated objects are exported with:
 
 ## Shape Library & Limitations
 
-The generator assembles objects from **14 primitive types**. Each row below varies
+The generator assembles objects from **16 primitive types**. Each row below varies
 one type to show its **degrees of freedom** (DOF) — how many independent shape
 parameters it has (sphere = 1, box = 3):
 
@@ -155,6 +155,8 @@ parameters it has (sphere = 1, box = 3):
 | **frustum** ✨ | 3 | r_bot, r_top, height | flared / truncated cone |
 | **hemisphere** ✨ | 1 | radius | dome / scoop |
 | **hex_prism** ✨ | 2 | radius, height | hex nut / bolt head |
+| **open_tube** ✨ | 3 | outer, wall, height | pipe / ring (open both ends) |
+| **ngon_prism** ✨ | 3 | n_sides, radius, height | triangular…octagonal prism |
 
 ### Faked shapes → missing primitives
 

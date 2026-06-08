@@ -32,6 +32,9 @@ class PrimitiveType(Enum):
     HEMISPHERE = "hemisphere"
     # v2.5 addition — faceted fastener.
     HEX_PRISM = "hex_prism"
+    # v2.6 additions (roadmap) — pipe + general faceted prism.
+    OPEN_TUBE = "open_tube"
+    NGON_PRISM = "ngon_prism"
 
 
 @dataclass
@@ -594,6 +597,70 @@ class HexPrism(Primitive):
 
     def volume(self) -> float:
         return float(1.5 * np.sqrt(3.0) * self.radius ** 2 * self.height)
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+@dataclass
+class OpenTube(Primitive):
+    """Hollow cylinder open at BOTH ends — a pipe / ring / bushing (vs HollowShell,
+    which has a floor). +Z axis, centered on its centroid."""
+    outer_radius: float = 0.02
+    wall_thickness: float = 0.005
+    height: float = 0.05
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.OPEN_TUBE)
+
+    def _dims(self):
+        R = float(self.outer_radius)
+        H = float(max(self.height, 2e-3))
+        w = float(np.clip(self.wall_thickness, 0.001, R - 0.001))
+        return R, H, w, R - w
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        R, H, w, Ri = self._dims()
+        outer = trimesh.creation.cylinder(radius=R, height=H, sections=48)
+        inner = trimesh.creation.cylinder(radius=Ri, height=H + 0.02, sections=48)
+        try:
+            tube = outer.difference(inner)        # through-hole, both ends open
+        except Exception:
+            tube = outer
+        return _recenter_and_place(tube, self.transform)
+
+    def volume(self) -> float:
+        R, H, w, Ri = self._dims()
+        return float(np.pi * (R * R - Ri * Ri) * H)
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+@dataclass
+class NGonPrism(Primitive):
+    """Regular n-gon prism (n in 3..8) — generalizes HexPrism for faceted bodies
+    (triangular, pentagonal, octagonal). ``radius`` is the circumradius. +Z axis,
+    centered on its centroid. ``n_sides`` is sampled continuously then rounded."""
+    n_sides: float = 5.0
+    radius: float = 0.02
+    height: float = 0.03
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.NGON_PRISM)
+
+    def _n(self):
+        return int(np.clip(round(self.n_sides), 3, 8))
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        mesh = trimesh.creation.cylinder(radius=self.radius, height=self.height,
+                                         sections=self._n())
+        mesh.apply_transform(self.transform.as_matrix())
+        return mesh
+
+    def volume(self) -> float:
+        n = self._n()
+        return float(0.5 * n * self.radius ** 2 * np.sin(2.0 * np.pi / n) * self.height)
 
     def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
         return self._mesh_inertia(density)

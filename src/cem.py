@@ -24,7 +24,7 @@ from pathlib import Path
 from primitives import (
     CompositeObject, Primitive, Box, Cylinder, Sphere, Capsule,
     Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle, Frustum, Hemisphere,
-    HexPrism, Transform, PrimitiveType, seat_height, half_extents,
+    HexPrism, OpenTube, NGonPrism, Transform, PrimitiveType, seat_height, half_extents,
 )
 from scoring import ObjectScorer, ScoreBreakdown, ScoringConfig
 
@@ -137,6 +137,17 @@ PRIMITIVE_SPECS: List[PrimitiveSpec] = [
                   np.array([0.006, 0.004]), np.array([0.04, 0.05]),
                   build=lambda p, t: HexPrism(radius=p[0], height=p[1], transform=t),
                   extract=lambda pr: np.array([pr.radius, pr.height])),
+    PrimitiveSpec(PrimitiveType.OPEN_TUBE, ['outer', 'wall', 'height'],
+                  _log(0.02, 0.005, 0.05), np.array([0.3, 0.25, 0.3]),
+                  np.array([0.008, 0.002, 0.015]), np.array([0.05, 0.012, 0.14]),
+                  build=lambda p, t: OpenTube(outer_radius=p[0], wall_thickness=p[1],
+                                              height=p[2], transform=t),
+                  extract=lambda pr: np.array([pr.outer_radius, pr.wall_thickness, pr.height])),
+    PrimitiveSpec(PrimitiveType.NGON_PRISM, ['n_sides', 'radius', 'height'],
+                  _log(5.0, 0.02, 0.03), np.array([0.25, 0.3, 0.3]),
+                  np.array([3.0, 0.008, 0.01]), np.array([8.0, 0.05, 0.08]),
+                  build=lambda p, t: NGonPrism(n_sides=p[0], radius=p[1], height=p[2], transform=t),
+                  extract=lambda pr: np.array([float(pr.n_sides), pr.radius, pr.height])),
 ]
 
 # Default type bias: favor box/cylinder slightly, rest uniform.

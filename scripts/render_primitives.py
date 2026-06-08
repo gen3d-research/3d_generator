@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from primitives import (Box, Cylinder, Sphere, Capsule, Cone, Pyramid,  # noqa: E402
                         Torus, Ellipsoid, Wedge, HollowShell, Handle,
-                        Frustum, Hemisphere, HexPrism)
+                        Frustum, Hemisphere, HexPrism, OpenTube, NGonPrism)
 from cem import PRIMITIVE_SPECS                                          # noqa: E402
 from _render_common import grid                                         # noqa: E402
 
@@ -109,6 +109,16 @@ GALLERY = [
         ("nut r18 h12", HexPrism(radius=0.018, height=0.012)),
         ("bolt-head r16 h10", HexPrism(radius=0.016, height=0.010)),
         ("post r12 h40", HexPrism(radius=0.012, height=0.040)),
+    ]),
+    ("OpenTube  (3 DOF: outer, wall, height)", [
+        ("pipe r15 w4 h100", OpenTube(outer_radius=0.015, wall_thickness=0.004, height=0.100)),
+        ("ring r25 w4 h20", OpenTube(outer_radius=0.025, wall_thickness=0.004, height=0.020)),
+        ("thick r20 w8 h50", OpenTube(outer_radius=0.020, wall_thickness=0.008, height=0.050)),
+    ]),
+    ("NGonPrism  (3 DOF: n_sides, radius, height)", [
+        ("triangle n3", NGonPrism(n_sides=3, radius=0.022, height=0.03)),
+        ("pentagon n5", NGonPrism(n_sides=5, radius=0.022, height=0.03)),
+        ("octagon n8", NGonPrism(n_sides=8, radius=0.022, height=0.03)),
     ]),
 ]
 

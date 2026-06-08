@@ -1,5 +1,12 @@
 # Roadmap — what to add next
 
+> **Update (v2.6):** the top two primitives (**open tube**, **n-gon prism**) and a
+> first batch of **Group-G archetypes** (bucket, flower_pot, vase, wine_bottle,
+> goblet, lamp, salt_shaker, pencil_cup, mortar, pipe, napkin_ring, octagon_nut,
+> funnel_v2) are now **built** — 16 primitives, 93 archetypes. The remaining
+> primitives (rounded box, gear/star, extrusion, helix) and archetypes below are
+> still open.
+
 The fidelity audit ([`PRIMITIVES.md`](PRIMITIVES.md)) took the primitive set from 9 → 14
 (hollow_shell, handle, frustum, hemisphere, hex_prism) and added a graspability gate + a
 per-type cap. This doc is the **menu of what's still worth adding**: (A) new *archetypes*
@@ -55,8 +62,8 @@ Ordered roughly by value × effort. "Unlocks" lists archetypes/features it would
 
 | Primitive | Params | Construction | Effort | Unlocks |
 |---|---|---|---|---|
-| **open tube / pipe** | outer_r, inner_r, height | CSG: cylinder − cylinder (both ends open) | low | pipe, straw, napkin ring, ferrule, bushing |
-| **n-gon prism** (param. `n`) | n, radius, height | manual n-gon cap + walls (generalizes `hex_prism`) | low | pentagon/octagon nuts, faceted pencils, dice variants, bolt heads |
+| **open tube / pipe** ✅ | outer_r, wall, height | CSG: cylinder − cylinder (both ends open) | low | pipe, straw, napkin ring (built v2.6) |
+| **n-gon prism** ✅ | n_sides, radius, height | `cylinder(sections=n)`, n∈3..8 | low | octagon nut, faceted bodies (built v2.6) |
 | **rounded / fillet box** | dims, fillet_r | CSG (box ∪ edge cylinders ∪ corner spheres) or minkowski | medium | phone, tablet, controller, soap bar, key fob — much more realistic |
 | **gear / star prism** | n_teeth, r_outer, r_inner, height | manual alternating-radius mesh | medium | real gears/sprockets (the current `gear_like` fakes teeth with boxes), star knobs |
 | **dish / plate** | radius, depth, wall | flattened `hollow_shell` / shallow SoR cap | low | plate, saucer, shallow bowl, lid (or just clamp `hollow_shell` thin) |

@@ -21,7 +21,7 @@ from typing import Callable, Dict
 from primitives import (
     CompositeObject, Box, Cylinder, Sphere, Capsule,
     Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle, Frustum, Hemisphere,
-    HexPrism, seat_height, Transform,
+    HexPrism, OpenTube, NGonPrism, seat_height, Transform,
     # existing v1 factories (registered below)
     create_small_box, create_tall_box, create_flat_box, create_mug_like,
     create_l_shape, create_dumbbell, create_hammer, create_bottle,
@@ -138,6 +138,16 @@ def _hemi(r, x=0.0, y=0.0, z=None, euler=None):
 def _hex(r, h, x=0.0, y=0.0, z=None, euler=None):
     z = h / 2 if z is None else z
     return HexPrism(radius=r, height=h, transform=_T(x, y, z, euler))
+
+
+def _tube(R, wall, h, x=0.0, y=0.0, z=None, euler=None):
+    z = h / 2 if z is None else z
+    return OpenTube(outer_radius=R, wall_thickness=wall, height=h, transform=_T(x, y, z, euler))
+
+
+def _ngon(n, r, h, x=0.0, y=0.0, z=None, euler=None):
+    z = h / 2 if z is None else z
+    return NGonPrism(n_sides=n, radius=r, height=h, transform=_T(x, y, z, euler))
 
 
 def _ell(rx, ry, rz, x=0.0, y=0.0, z=None, euler=None):
@@ -673,6 +683,102 @@ def create_bracket_angle(l: float = 0.07, w: float = 0.04, t: float = 0.01) -> C
     horiz = _box(w, l, t, z=t / 2)
     vert = _box(w, t, l, y=-l / 2 + t / 2, z=l / 2)
     return _co("bracket_angle", horiz, vert)
+
+
+# ===========================================================================
+# Group G — roadmap shapes (v2.6) — enabled by the audit-added primitives
+# (hollow_shell, handle, frustum, hemisphere, hex_prism, open_tube, ngon_prism)
+# ===========================================================================
+
+@archetype("bucket")
+def create_bucket(r_bot: float = 0.035, r_top: float = 0.05, h: float = 0.075) -> CompositeObject:
+    body = _frustum(r_bot, r_top, h)                                  # tapered pail
+    handle = _handle(0.018, 0.005, 0.004, arc=1.4 * np.pi,
+                     x=r_top + 0.001, z=h * 0.6, euler=[np.pi / 2, 0, 0])
+    return _co("bucket", body, handle)
+
+
+@archetype("flower_pot")
+def create_flower_pot(r_bot: float = 0.03, r_top: float = 0.045, h: float = 0.05) -> CompositeObject:
+    body = _frustum(r_bot, r_top, h)
+    rim = _tor(r_top, 0.005, z=h - 0.003)
+    return _co("flower_pot", body, rim)
+
+
+@archetype("vase")
+def create_vase(r0: float = 0.035, r1: float = 0.018, r2: float = 0.032,
+                h1: float = 0.05, h2: float = 0.05) -> CompositeObject:
+    base = _frustum(r0, r1, h1)                                       # tapers in
+    neck = _frustum(r1, r2, h2, z=h1 + h2 * 0.45)                     # flares back out
+    return _co("vase", base, neck)
+
+
+@archetype("wine_bottle")
+def create_wine_bottle(r: float = 0.03, body_h: float = 0.08,
+                       neck_r: float = 0.011, neck_h: float = 0.045) -> CompositeObject:
+    body = _cyl(r, body_h)
+    shoulder = _frustum(r, neck_r, 0.025, z=body_h + 0.005)
+    neck = _cyl(neck_r, neck_h, z=body_h + 0.02 + neck_h / 2)
+    cap = _cyl(neck_r * 1.15, 0.012, z=body_h + 0.02 + neck_h - 0.004)
+    return _co("wine_bottle", body, shoulder, neck, cap)
+
+
+@archetype("goblet")
+def create_goblet(bowl_r: float = 0.03, stem_h: float = 0.05) -> CompositeObject:
+    foot = _frustum(0.03, 0.012, 0.008)
+    stem = _cyl(0.005, stem_h, z=0.008 + stem_h / 2 - 0.002)
+    bowl = _frustum(0.014, bowl_r, 0.035, z=0.008 + stem_h + 0.012)   # flared cup
+    return _co("goblet", foot, stem, bowl)
+
+
+@archetype("lamp")
+def create_lamp(base_r: float = 0.04, stem_h: float = 0.08, shade_r: float = 0.05) -> CompositeObject:
+    base = _hemi(base_r)
+    stem = _cyl(0.006, stem_h, z=base_r * 0.4 + stem_h / 2)
+    shade = _frustum(0.018, shade_r, 0.045, z=base_r * 0.4 + stem_h)
+    return _co("lamp", base, stem, shade)
+
+
+@archetype("salt_shaker")
+def create_salt_shaker(r: float = 0.018, h: float = 0.05) -> CompositeObject:
+    body = _hex(r, h)
+    top = _hemi(r * 0.95, z=h - 0.004)
+    return _co("salt_shaker", body, top)
+
+
+@archetype("pencil_cup")
+def create_pencil_cup(r: float = 0.032, h: float = 0.085) -> CompositeObject:
+    return _co("pencil_cup", _shell(r, 0.004, h, floor=0.005))       # open desk cup
+
+
+@archetype("mortar")
+def create_mortar(r: float = 0.045, h: float = 0.045) -> CompositeObject:
+    return _co("mortar", _shell(r, 0.009, h, floor=0.012))           # thick stone bowl
+
+
+@archetype("pipe")
+def create_pipe(r: float = 0.015, h: float = 0.10) -> CompositeObject:
+    return _co("pipe", _tube(r, 0.004, h))                           # hollow both ends
+
+
+@archetype("napkin_ring")
+def create_napkin_ring(r: float = 0.025, h: float = 0.022) -> CompositeObject:
+    return _co("napkin_ring", _tube(r, 0.004, h))
+
+
+@archetype("octagon_nut")
+def create_octagon_nut(r: float = 0.018, h: float = 0.012) -> CompositeObject:
+    body = _ngon(8, r, h)
+    ring = _tor(r * 0.6, 0.004, z=h / 2)
+    return _co("octagon_nut", body, ring)
+
+
+@archetype("funnel_v2")
+def create_funnel_v2(top_r: float = 0.04, cone_h: float = 0.05,
+                     tube_r: float = 0.009, tube_h: float = 0.04) -> CompositeObject:
+    tube = _cyl(tube_r, tube_h)
+    cone = _frustum(tube_r, top_r, cone_h, z=tube_h - 0.004 + 0.02)  # flared open mouth
+    return _co("funnel_v2", tube, cone)
 
 
 # ---------------------------------------------------------------------------
