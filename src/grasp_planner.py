@@ -431,7 +431,13 @@ def _score_grasp(g: Grasp, ctx: _GeomCtx, gripper: GripperSpec,
     f_narrow = float(np.clip(1.0 - w_norm, 0.0, 1.0))
     if g.width < 0.008:
         f_narrow *= 0.6
-    d_com = float(np.linalg.norm(g.center - ctx.com)) / (ctx.diag + 1e-9)
+    # BALANCE, not "grasp at the CoM": what matters is that the CoM hangs
+    # vertically below the grip so the object doesn't tip when lifted — i.e. the
+    # HORIZONTAL offset (perpendicular to gravity) between the grasp and the CoM.
+    # Using the 3D distance would be wrong because the CoM often lies OUTSIDE the
+    # solid (an open scissor's CoM is in the air between the blades), so no
+    # on-body grasp can ever be "at" it; the horizontal projection is what counts.
+    d_com = float(np.linalg.norm((g.center - ctx.com)[:2])) / (ctx.diag + 1e-9)
     f_com = float(np.exp(-(d_com / 0.25) ** 2))
     margin_max = 1.0 - 1.0 / np.sqrt(1.0 + gripper.mu * gripper.mu)
     f_margin = float(np.clip(g.margin / (margin_max + 1e-9), 0.0, 1.0))
