@@ -225,6 +225,7 @@ class DemoNode(Node):
         # whether the fingers stalled against the object (contact) or closed all
         # the way to 0 (missed it).
         self._finger_pos = None
+        self._arm_q = None    # latest 7 arm-joint positions (to seed Cartesian-descent IK)
         self.create_subscription(JointState, "/joint_states", self._js_cb, 10)
 
         # Finger EFFORT command (forward_command_controller): [f1, f2].
@@ -263,6 +264,12 @@ class DemoNode(Node):
     def _js_cb(self, msg):
         if "panda_finger_joint1" in msg.name:
             self._finger_pos = float(msg.position[msg.name.index("panda_finger_joint1")])
+        if "panda_joint1" in msg.name:
+            try:
+                self._arm_q = [float(msg.position[msg.name.index(f"panda_joint{i}")])
+                               for i in range(1, 8)]
+            except (ValueError, IndexError):
+                pass
 
     def track_object(self, name, mesh_url, extents):
         self._track = (name, mesh_url, np.asarray(extents, dtype=float))
@@ -515,10 +522,9 @@ class DemoNode(Node):
             else:
                 size = np.asarray(extents if extents is not None else [0.05] * 3, float)
                 ctr_local = np.zeros(3)
-            # Shrink to ~the object's core: covers the bulk the wrist must avoid,
-            # while leaving the fingertips (at the real surface, near the AABB
-            # boundary) outside so the grasp pose still plans with the box ON.
-            size = np.maximum(size * 0.8, 0.005)
+            # Slightly shrink so the pre-grasp (just outside the object) still
+            # plans, while the box covers the object for the approach traverse.
+            size = np.maximum(size * 0.9, 0.005)
             base = np.zeros(3) if base is None else np.asarray(base, float)
             quat = np.array([0.0, 0.0, 0.0, 1.0]) if quat is None else np.asarray(quat, float)
             ctr_world = base + _rotate(quat, ctr_local)
@@ -651,6 +657,50 @@ def go_home(demo, arm, execute, moveit_py):
     result = arm.plan()
     if result and result.trajectory is not None:
         demo.animate(result.trajectory, time_scale=1.5, min_stage_seconds=2.0)
+
+
+def _cartesian_descent(demo, arm, moveit_py, pre, grasp, approach, axis, execute,
+                       steps: int = 6, duration: float = 2.5) -> bool:
+    """Descend from pre-grasp to grasp along a STRAIGHT line (constant gripper
+    orientation), so the hand/wrist follows the fingers straight in and never
+    swings into the object. Solves IK per waypoint and sends the result to the
+    arm controller directly. Falls back to a normal MoveIt plan if IK fails or
+    we're not executing."""
+    if not execute or moveit_py is None:
+        return _move(demo, arm, grasp, approach, execute, moveit_py, "grasp", axis=axis)
+    demo.get_logger().info("  -> grasp (straight descent)")
+    quat = grasp_quaternion(approach, axis) if axis is not None else look_at_quaternion(approach)
+    try:
+        from moveit.core.robot_state import RobotState
+        rs_obj = RobotState(moveit_py.get_robot_model())
+        if demo._arm_q is not None:
+            rs_obj.set_joint_group_positions("panda_arm", np.asarray(demo._arm_q, float))
+        rs_obj.update()
+        pts = []
+        for s in np.linspace(0.0, 1.0, steps):
+            p = pre + s * (grasp - pre)
+            pose = Pose(position=Point(x=float(p[0]), y=float(p[1]), z=float(p[2])),
+                        orientation=quat)
+            if not rs_obj.set_from_ik("panda_arm", pose, "panda_link8", timeout=0.2):
+                demo.get_logger().warn("     descent IK failed; using a normal plan")
+                return _move(demo, arm, grasp, approach, execute, moveit_py, "grasp", axis=axis)
+            rs_obj.update()
+            pts.append([float(v) for v in rs_obj.get_joint_group_positions("panda_arm")])
+    except Exception as exc:
+        demo.get_logger().warn(f"     cartesian descent error ({exc}); using a normal plan")
+        return _move(demo, arm, grasp, approach, execute, moveit_py, "grasp", axis=axis)
+    jt = JointTrajectory()
+    jt.joint_names = PANDA_JOINT_NAMES[:7]
+    for i, q in enumerate(pts):
+        ptn = JointTrajectoryPoint()
+        ptn.positions = q
+        t = duration * (i + 1) / len(pts)
+        ptn.time_from_start.sec = int(t)
+        ptn.time_from_start.nanosec = int((t - int(t)) * 1e9)
+        jt.points.append(ptn)
+    demo._arm_traj.publish(jt)
+    time.sleep(duration + 0.5)
+    return True
 
 
 def query_object_z(name: str, timeout: float = 4.0):
@@ -817,22 +867,18 @@ def pick_and_place_once(demo: DemoNode, arm, entry, spawn_cfg, place_offset,
 
         if execute:
             demo.set_finger_effort(demo.open_eff)
-        # Collision-aware approach AND descent: keep the object as an obstacle
-        # through BOTH the pre-grasp move and the descent into the grasp, so the
-        # hand/wrist (the "root" of the gripper) routes around the object and
-        # never drives into it. The box is shrunk so the FINGERTIPS (at the real
-        # surface) still reach the grasp; the bulk the wrist must avoid stays
-        # covered. Removed only once the gripper is at the grasp (before squeeze
-        # + lift, when the object is between the fingers).
+        # Collision-aware approach: object is an obstacle while moving to the
+        # pre-grasp (route AROUND it). Removed for the descent, which is a
+        # CARTESIAN straight line (see _cartesian_descent) so the hand/wrist
+        # follows the fingers straight in and never swings into the object.
         demo.set_object_collision(True, base, base_quat, extents, aabb)
-        if not _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis):
-            demo.set_object_collision(False)
+        approached = _move(demo, arm, pre, approach, execute, moveit_py, "pre-grasp", axis=axis)
+        demo.set_object_collision(False)
+        if not approached:
             gi += 1; per_grasp = 0; continue   # plan failure: next grasp, no attempt burned
-        if not _move(demo, arm, grasp, approach, execute, moveit_py, "grasp", axis=axis):
-            demo.set_object_collision(False)
+        if not _cartesian_descent(demo, arm, moveit_py, pre, grasp, approach, axis, execute):
             gi += 1; per_grasp = 0; continue
-        demo.set_object_collision(False)       # at the grasp now; clear the obstacle
-        attempts += 1   # both poses planned -> this is a real grasp attempt
+        attempts += 1   # reached the grasp -> this is a real grasp attempt
         per_grasp += 1
 
         # GENUINE grasp: squeeze the fingers onto the object with force; the
