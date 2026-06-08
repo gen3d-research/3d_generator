@@ -45,7 +45,11 @@ class GeneratorConfig:
     # reproduces v1 scoring. See DISCREPANCIES.md item 8.
     assembly_weight: float = 1.0
     target_primitives: int = 3
-    
+    # Low-graspability gate (v2.4): penalize the total by the graspable-material
+    # fraction so the CEM stops favoring ungraspable cone/pyramid parts. On by
+    # default for v2; paper_repro turns it off to preserve v1 scoring.
+    low_grasp_gate: bool = True
+
     # Export settings
     density: float = 1000.0
     mesh_format: str = "obj"
@@ -96,7 +100,8 @@ class RoboticObjectGenerator:
             gripper_width_max=self.config.gripper_width_max,
             density=self.config.density,
             assembly_weight=self.config.assembly_weight,
-            target_primitives=self.config.target_primitives
+            target_primitives=self.config.target_primitives,
+            low_grasp_gate=self.config.low_grasp_gate,
         )
         self.scorer = ObjectScorer(self.scoring_config)
         
@@ -372,6 +377,7 @@ def paper_repro_generator(seed: int = 42) -> 'RoboticObjectGenerator':
         require_connected=False,
         rerank_by_grasp=False,
         assembly_weight=0.0,       # v1 scoring had no assembly reward
+        low_grasp_gate=False,      # v1 scoring had no graspability gate
         seed=seed,
     )
     gen = RoboticObjectGenerator(config)

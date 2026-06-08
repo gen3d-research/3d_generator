@@ -15,7 +15,19 @@ import trimesh
 from scipy.spatial import ConvexHull
 from scipy.spatial.distance import cdist
 
-from primitives import CompositeObject
+from primitives import CompositeObject, PrimitiveType
+
+
+# Per-type graspability prior for the part-aware gate. Cones and pyramids taper
+# to an apex and have NO antipodal (parallel-jaw) pair on their sloped surface —
+# the whole-object proxy confirms graspability 0.0 for them in isolation. Every
+# other type has a graspable pair (a wedge across its flat triangular faces, a
+# cylinder/sphere/shell across its body). Used (volume-weighted) so an
+# ungraspable part is not masked by a graspable one inside a composite.
+_TYPE_GRASPABILITY = {
+    PrimitiveType.CONE: 0.2,
+    PrimitiveType.PYRAMID: 0.2,
+}
 
 
 @dataclass
@@ -50,6 +62,17 @@ class ScoringConfig:
     # Set ``assembly_weight = 0.0`` to recover the v1 (paper) scoring exactly.
     target_primitives: int = 3
     assembly_weight: float = 1.0
+
+    # Low-graspability GATE (v2.4). When True, multiply the total by the
+    # graspable-material fraction (whole-object graspability x volume-weighted
+    # per-type graspability), floored at ``low_grasp_floor``. This makes
+    # graspability a hard requirement instead of an 18%-weighted average, so the
+    # CEM stops sprinkling ungraspable cones/pyramids that the whole-object proxy
+    # would otherwise mask inside a graspable composite ("free" pointy parts).
+    # Default OFF so direct ScoringConfig() / v1 paper_repro scoring is unchanged;
+    # the v2 generator turns it on.
+    low_grasp_gate: bool = False
+    low_grasp_floor: float = 0.25
 
 
 @dataclass
@@ -147,7 +170,34 @@ class ObjectScorer:
             weights['complexity'] * result.complexity_score
         ) / total_weight
 
+        # Low-graspability gate (v2.4, opt-in): a multiplicative penalty by the
+        # graspable-material fraction so an ungraspable cone/pyramid is no longer
+        # "free" inside a graspable composite. Fully-graspable objects (gate=1)
+        # are unchanged, so v1/box scoring is preserved.
+        if self.config.low_grasp_gate:
+            g_eff = result.graspability_score * self._part_graspability(obj)
+            gate = float(np.clip(g_eff, self.config.low_grasp_floor, 1.0))
+            result.total_score *= gate
+
         return result
+
+    def _part_graspability(self, obj: CompositeObject) -> float:
+        """Volume-weighted graspability over the object's primitives (per-type
+        prior). 1.0 if every part is graspable; lower as ungraspable (cone/
+        pyramid) parts take up more volume — so a small decorative spike barely
+        matters but a big cone does."""
+        prims = getattr(obj, 'primitives', None)
+        if not prims:
+            return 1.0
+        num = den = 0.0
+        for p in prims:
+            try:
+                v = max(float(p.volume()), 1e-9)
+            except Exception:
+                v = 1e-9
+            num += v * _TYPE_GRASPABILITY.get(getattr(p, 'ptype', None), 1.0)
+            den += v
+        return float(num / den) if den > 0 else 1.0
     
     def _score_size(self, obj: CompositeObject) -> Tuple[float, np.ndarray]:
         """

@@ -137,6 +137,20 @@ def test_assembly_weight_zero_recovers_v1():
     assert v1 == pytest.approx(1.0, abs=1e-6)
 
 
+def test_low_grasp_gate_penalizes_ungraspable_not_graspable():
+    box = P.create_simple_box(np.array([0.05, 0.05, 0.06]))
+    cone = P.CompositeObject(primitives=[
+        Cone(radius=0.03, height=0.07,
+             transform=Transform(translation=np.array([0.0, 0.0, 0.0175])))])
+    off = ObjectScorer(ScoringConfig(low_grasp_gate=False))
+    on = ObjectScorer(ScoringConfig(low_grasp_gate=True))
+    # A graspable box is unchanged by the gate; a lone (ungraspable) cone is
+    # penalized below the acceptance threshold.
+    assert on.score(box).total_score == pytest.approx(off.score(box).total_score)
+    assert off.score(cone).total_score >= 0.4
+    assert on.score(cone).total_score < 0.4
+
+
 # --- paper-repro preset -----------------------------------------------------
 
 def test_paper_repro_restricts_space():

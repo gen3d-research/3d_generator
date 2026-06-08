@@ -172,10 +172,20 @@ Three things conspire:
 
 So cone/pyramid/wedge-bearing composites readily become elites, and the learned
 `primitive_type_probs` never suppresses those types. This is a **scoring** issue,
-separate from the missing-primitives issue above — possible fixes (future work):
-raise the graspability weight, penalize *low* graspability multiplicatively (a
-gate, like the grasp planner's other gates) rather than averaging it in, or score
-graspability per-part so an ungraspable part is not masked by a graspable one.
+separate from the missing-primitives issue above.
+
+**✅ Fixed (v2.4) — the low-graspability gate.** The total score is now multiplied
+by a **part-aware graspability gate**: `total ×= clip(g_whole · g_parts, 0.25, 1)`,
+where `g_parts` is the **volume-weighted** per-type graspability (cone/pyramid ≈ 0.2,
+everything else 1.0). So an ungraspable part is no longer "free": a *lone* cone is
+gated below the accept threshold (0.67 → 0.17), and a composite is penalized in
+proportion to how much of its **volume** is pointy (a small decorative tip barely
+matters; a big cone drops the score a lot). Fully-graspable objects (a box, a mug)
+are unchanged (gate = 1.0), so v1 / `paper_repro` scoring is preserved — the gate is
+opt-in (off in `ScoringConfig` by default, on in the v2 generator). **Measured
+effect:** trained-CEM cone+pyramid usage fell from ~4% → ~1% of parts, and the
+optimized type mix shifted to all-graspable shapes (box, hemisphere, frustum,
+sphere, handle).
 
 ---
 
