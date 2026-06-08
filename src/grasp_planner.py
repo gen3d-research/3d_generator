@@ -265,41 +265,89 @@ def _grasp_geometry(obj: CompositeObject, mesh: trimesh.Trimesh) -> _GeomCtx:
                     elong=_unit(axes[0]), elong_ratio=float(elong_ratio))
 
 
+def _section_lobes(planar) -> List[np.ndarray]:
+    """Split a 2D cross-section into connected components (lobes) WITHOUT needing
+    networkx/shapely (Path2D.split()/polygons_full need them). Union-find over the
+    entity polyline segments; returns a list of (N,2) vertex arrays, one per lobe."""
+    try:
+        V = np.asarray(planar.vertices, float)
+        n = len(V)
+        if n < 3:
+            return [V] if n else []
+        parent = list(range(n))
+
+        def find(a):
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+
+        def union(a, b):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        for ent in planar.entities:
+            idx = np.asarray(ent.points).astype(int)
+            for i in range(len(idx) - 1):
+                union(int(idx[i]), int(idx[i + 1]))
+            if getattr(ent, "closed", False) and len(idx) > 1:
+                union(int(idx[0]), int(idx[-1]))
+        comps = {}
+        for i in range(n):
+            comps.setdefault(find(i), []).append(i)
+        lobes = [V[idxs] for idxs in comps.values() if len(idxs) >= 3]
+        return lobes or [V]
+    except Exception:
+        try:
+            return [np.asarray(planar.vertices, float)]
+        except Exception:
+            return []
+
+
 def _measure_section(union: trimesh.Trimesh, origin: np.ndarray,
-                     axis: np.ndarray) -> Optional[_SliceInfo]:
-    """Cut a cross-section and measure its width + thin (minor) direction."""
+                     axis: np.ndarray) -> List[_SliceInfo]:
+    """Cut a cross-section and measure each LOBE (connected component) separately:
+    its centroid, width and thin (minor) direction. Splitting per lobe is what
+    lets a multi-armed shape (a U's two arms, a scissor's two blades) be grasped
+    on each arm — the whole-section centroid would otherwise fall in the air
+    between the lobes."""
     try:
         sec = union.section(plane_origin=origin, plane_normal=axis)
         if sec is None:
-            return None
+            return []
         planar, to_3d = sec.to_planar()
     except Exception:
-        return None
-    pts = np.asarray(planar.vertices, float)
-    if len(pts) < 3:
-        return None
-    c2d = pts.mean(axis=0)
-    d = pts - c2d
-    r = np.linalg.norm(d, axis=1)
-    width = 2.0 * float(np.percentile(r, 95))
-    # minor axis = smallest-variance direction of the section points
-    try:
-        cov = np.cov(d.T)
-        evals, evecs = np.linalg.eigh(cov)
-        minor2d = evecs[:, 0]
-    except Exception:
-        minor2d = np.array([1.0, 0.0])
-    minor_width = 2.0 * float(np.max(np.abs(d @ minor2d))) if len(d) else width
-    R = np.asarray(to_3d, float)[:3, :3]
-    minor3d = _unit(R @ np.array([minor2d[0], minor2d[1], 0.0]))
-    centroid3d = (np.asarray(to_3d, float) @ np.array([c2d[0], c2d[1], 0.0, 1.0]))[:3]
-    return _SliceInfo(centroid3d=centroid3d, width=width,
-                      minor_width=minor_width, minor3d=minor3d, axis=_unit(axis))
+        return []
+    R = np.asarray(to_3d, float)
+    out: List[_SliceInfo] = []
+    for pts in _section_lobes(planar):
+        pts = np.asarray(pts, float)
+        if len(pts) < 3:
+            continue
+        c2d = pts.mean(axis=0)
+        d = pts - c2d
+        r = np.linalg.norm(d, axis=1)
+        width = 2.0 * float(np.percentile(r, 95))
+        try:
+            evals, evecs = np.linalg.eigh(np.cov(d.T))
+            minor2d = evecs[:, 0]
+        except Exception:
+            minor2d = np.array([1.0, 0.0])
+        minor_width = 2.0 * float(np.max(np.abs(d @ minor2d))) if len(d) else width
+        minor3d = _unit(R[:3, :3] @ np.array([minor2d[0], minor2d[1], 0.0]))
+        centroid3d = (R @ np.array([c2d[0], c2d[1], 0.0, 1.0]))[:3]
+        out.append(_SliceInfo(centroid3d=centroid3d, width=width,
+                              minor_width=minor_width, minor3d=minor3d,
+                              axis=_unit(axis)))
+    return out
 
 
 def _find_waists(ctx: _GeomCtx, gripper: GripperSpec,
-                 n_slices: int = 40, max_waists: int = 8) -> List[_SliceInfo]:
-    """Locally-narrow graspable cross-sections (handles / bridges / necks)."""
+                 n_slices: int = 40, max_waists: int = 12) -> List[_SliceInfo]:
+    """Graspable cross-sections (handles / bridges / necks / individual arms).
+    Sweeps slices along each axis and collects every LOBE whose width fits the
+    gripper; the scorer then ranks them (narrowness, balance, stability)."""
     found: List[_SliceInfo] = []
     V = np.asarray(ctx.union.vertices, float)
     for axis in ctx.axes:
@@ -308,32 +356,15 @@ def _find_waists(ctx: _GeomCtx, gripper: GripperSpec,
         if hi - lo < 1e-4:
             continue
         eps = 0.04 * (hi - lo)
-        ts = np.linspace(lo + eps, hi - eps, n_slices)
-        slices = [s for tt in ts
-                  if (s := _measure_section(ctx.union, ctx.com + (tt - ctx.com @ axis) * axis, axis))]
-        if len(slices) < 3:
-            continue
-        w = np.array([s.width for s in slices])
-        # pronounced local minima within the gripper opening
-        for k in range(1, len(w) - 1):
-            if w[k] <= w[k - 1] and w[k] <= w[k + 1] and w[k] <= gripper.width_max:
-                lo_i, hi_i = max(0, k - 4), min(len(w), k + 5)
-                if w[k] < 0.9 * float(w[lo_i:hi_i].max()):
-                    found.append(slices[k])
-        # Always consider the narrowest cross-section; among near-equally-narrow
-        # slices (uniform parts like a plain cylinder) prefer the one nearest the
-        # CoM so the grasp is balanced (mid-length), not at an end/rim.
-        wmin = float(w.min())
-        near = [s for s, ww in zip(slices, w)
-                if ww <= gripper.width_max and ww <= wmin + 0.1 * max(wmin, 1e-6)]
-        if near:
-            com_t = float(ctx.com @ axis)
-            near.sort(key=lambda s: abs(float(s.centroid3d @ axis) - com_t))
-            found.append(near[0])
-    # de-dupe near-identical waists; keep the narrowest few
+        for tt in np.linspace(lo + eps, hi - eps, n_slices):
+            origin = ctx.com + (tt - ctx.com @ axis) * axis
+            for s in _measure_section(ctx.union, origin, axis):
+                if s.width <= gripper.width_max:
+                    found.append(s)
+    # de-dupe nearby lobes; keep the narrowest few (scorer does the rest)
     uniq: List[_SliceInfo] = []
     for s in sorted(found, key=lambda s: s.width):
-        if all(np.linalg.norm(s.centroid3d - u.centroid3d) > 0.01 for u in uniq):
+        if all(np.linalg.norm(s.centroid3d - u.centroid3d) > 0.015 for u in uniq):
             uniq.append(s)
     return uniq[:max_waists]
 
@@ -474,13 +505,18 @@ def _score_grasp(g: Grasp, ctx: _GeomCtx, gripper: GripperSpec,
     except Exception:
         zlo, zhi, height, z_frac = 0.0, 1.0, 1.0, 1.0
     base_ok = float(np.clip(z_frac / 0.15, 0.3, 1.0))
+    # Top-edge gate: a grasp at the very top rim has little material around it
+    # (e.g. a side grasp's fingers stick out past the top -> less contact). Mild
+    # penalty on the top ~15%, so a feature spanning the height is grasped in the
+    # upper-MIDDLE; a feature that only exists at the top (a U's arms) still wins.
+    top_ok = float(np.clip((1.0 - z_frac) / 0.15, 0.5, 1.0))
     # Hang-stability gate: when lifted, the object pivots about the grip. If the
     # grip is BELOW the CoM, the CoM is an inverted pendulum and flips over (can
     # break the grasp); if the grip is at/above the CoM, it hangs stably. dz>0
     # means grip above CoM (good). Penalize grip-below-CoM, full credit above.
     dz = (g.center[2] - ctx.com[2]) / (height + 1e-9)
     stable_ok = float(np.clip(1.0 + 2.0 * dz, 0.3, 1.0))
-    return score * close_ok * base_ok * stable_ok
+    return score * close_ok * base_ok * top_ok * stable_ok
 
 
 # ---------------------------------------------------------------------------
