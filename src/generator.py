@@ -210,8 +210,32 @@ class RoboticObjectGenerator:
                 o.name = f"generated_{i:04d}"
         
         return objects
-    
-    def generate_stream(self, 
+
+    def sample_with_verdicts(self, n: int = 12):
+        """Sample ``n`` objects from the current distribution and tag each with
+        the accept/reject verdict the quality gate would give it — WITHOUT the
+        retry loop and WITHOUT reranking. Used only for documentation (showing
+        accepted vs rejected samples). ``generate()`` is unaffected.
+
+        Returns a list of ``(CompositeObject, verdict)`` where verdict is one of
+        ``'accepted'`` / ``'disconnected'`` / ``f'low_score:{total:.2f}'``.
+        (The ``'disconnected'`` verdict requires a CSG backend; without one,
+        ``is_connected()`` is permissive and only ``'low_score'`` appears.)
+        """
+        out = []
+        for i in range(n):
+            obj = self.distribution.sample_object(self.rng, name=f"sample_{i:04d}")
+            if self.config.require_connected and not obj.is_connected():
+                out.append((obj, "disconnected"))
+                continue
+            score = self.scorer.score(obj)
+            if score.total_score >= self.config.min_score_threshold:
+                out.append((obj, "accepted"))
+            else:
+                out.append((obj, f"low_score:{score.total_score:.2f}"))
+        return out
+
+    def generate_stream(self,
                         ensure_quality: bool = True) -> Generator[CompositeObject, None, None]:
         """
         Generate objects as an infinite stream.

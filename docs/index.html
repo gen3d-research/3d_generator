@@ -96,6 +96,7 @@
       <div class="navbar-start" style="flex-grow: 1; justify-content: center;">
         <a class="navbar-item" href="#abstract"><span class="icon"><i class="fas fa-book-open"></i></span><span>Abstract</span></a>
         <a class="navbar-item" href="#method"><span class="icon"><i class="fas fa-cogs"></i></span><span>Method</span></a>
+        <a class="navbar-item" href="#shapes"><span class="icon"><i class="fas fa-shapes"></i></span><span>Shapes</span></a>
         <a class="navbar-item" href="#videos"><span class="icon"><i class="fas fa-video"></i></span><span>Videos</span></a>
         <a class="navbar-item" href="#results"><span class="icon"><i class="fas fa-chart-bar"></i></span><span>Results</span></a>
         <a class="navbar-item" href="#reproduce"><span class="icon"><i class="fas fa-flask"></i></span><span>Reproduce</span></a>
@@ -249,9 +250,10 @@
         <div class="column is-6">
           <div class="box">
             <h3 class="title is-5"><span class="pillar-tag" style="background:#2196F3;">1</span> Parametric primitives</h3>
-            <p>Each object is a union of one to four boxes, cylinders, spheres, or capsules with rigid
-            transforms. Mass, COM, and inertia have closed-form expressions, so every exported asset
-            ships with physically consistent inertial properties.</p>
+            <p>Each object is a union of primitives drawn from <strong>9 types</strong> (box, cylinder,
+            sphere, capsule, cone, pyramid, torus, ellipsoid, wedge) with rigid transforms. Mass, COM,
+            and inertia are closed-form or mesh-derived, so every exported asset ships with physically
+            consistent inertial properties.</p>
           </div>
         </div>
         <div class="column is-6">
@@ -287,6 +289,47 @@
             <p class="figure-caption">Offline generation produces a manifest of URDF/SDF assets; the
               <code>generated_objects_eval</code> ROS&nbsp;2 package consumes that manifest from
               MoveIt&nbsp;2 and Gazebo nodes.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Shape library -->
+  <section class="section" id="shapes">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3 has-text-centered">Shape library &amp; limitations</h2>
+      <p class="has-text-centered" style="max-width:760px;margin:0 auto 1.5rem;">
+        Objects are assembled from 9 primitive types. Each row below varies one type to show its
+        <em>degrees of freedom</em> &mdash; how many independent shape parameters it has (a sphere has
+        one, a box has three).</p>
+      <div class="columns is-centered">
+        <div class="column is-two-thirds">
+          <div class="figure-container">
+            <img src="./static/images/primitives.png" alt="Primitive gallery">
+            <p class="figure-caption">The 9 primitive types, each shown with variants that exercise its
+              degrees of freedom.</p>
+          </div>
+        </div>
+      </div>
+      <p class="has-text-centered" style="max-width:760px;margin:1rem auto 1.5rem;">
+        Most archetypes are faithful, but every <strong>container, handle, taper, and dome is faked</strong>
+        with a solid or full-ring stand-in &mdash; a mug body is a <em>solid</em> cylinder, a cup handle a
+        <em>full</em> torus. The CEM can only assemble solid primitives, so it can never discover a hollow or
+        handled object. A full fidelity audit and ready-to-implement designs for new primitives
+        (hollow shell, partial-arc handle, frustum, hemisphere) are in
+        <a href="https://github.com/gen3d-research/3d_generator/blob/main/docs/PRIMITIVES.md"><code>docs/PRIMITIVES.md</code></a>.</p>
+      <div class="columns is-centered">
+        <div class="column is-half">
+          <div class="figure-container">
+            <img src="./static/images/samples_verdicts.png" alt="Accepted vs rejected raw samples">
+            <p class="figure-caption">Raw samples &mdash; quality gate accepts (green) / rejects (red).</p>
+          </div>
+        </div>
+        <div class="column is-half">
+          <div class="figure-container">
+            <img src="./static/images/samples_optimized.png" alt="CEM-optimized samples">
+            <p class="figure-caption">CEM-optimized set &mdash; cleaner, but still only solid primitives.</p>
           </div>
         </div>
       </div>
