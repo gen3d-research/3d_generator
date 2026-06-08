@@ -27,6 +27,9 @@ class PrimitiveType(Enum):
     # v2.2 additions — hollow/handled shapes for realistic containers.
     HOLLOW_SHELL = "hollow_shell"
     HANDLE = "handle"
+    # v2.3 additions — tapered/domed shapes.
+    FRUSTUM = "frustum"
+    HEMISPHERE = "hemisphere"
 
 
 @dataclass
@@ -368,22 +371,26 @@ class Wedge(Primitive):
         return self._mesh_inertia(density)
 
 
-def _finish_mesh(verts, faces, transform) -> trimesh.Trimesh:
-    """Build a manual mesh, ensure outward winding (positive volume), recenter on
-    its centroid (so ``transform.translation == world centroid``, the project
-    contract), then apply the transform."""
-    mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=True)
-    # Gate on is_watertight (topological), NOT is_volume — the latter needs
-    # is_winding_consistent, which needs networkx (absent here) and so returns
-    # False even for a perfectly good mesh. Signed volume + center_mass are valid
-    # on any watertight, consistently-wound mesh; invert() flips a globally-
-    # inward winding to outward (positive volume -> correct inertia/centroid).
+def _recenter_and_place(mesh: trimesh.Trimesh, transform) -> trimesh.Trimesh:
+    """Ensure outward winding (positive volume), recenter on the centroid (so
+    ``transform.translation == world centroid``, the project contract), then apply
+    the transform. Gate on is_watertight (topological), NOT is_volume — the latter
+    needs is_winding_consistent, which needs networkx (absent here) and returns
+    False even for a perfectly good mesh. Signed volume + center_mass are valid on
+    any watertight, consistently-wound mesh; invert() flips a globally-inward
+    winding to outward."""
     if mesh.is_watertight:
         if mesh.volume < 0:
             mesh.invert()
         mesh.apply_translation(-mesh.center_mass)
     mesh.apply_transform(transform.as_matrix())
     return mesh
+
+
+def _finish_mesh(verts, faces, transform) -> trimesh.Trimesh:
+    """Build a manual mesh from vertices/faces, then recenter + place it."""
+    return _recenter_and_place(
+        trimesh.Trimesh(vertices=verts, faces=faces, process=True), transform)
 
 
 @dataclass
@@ -490,6 +497,77 @@ class Handle(Primitive):
         # cross-section area (π·a·b) × swept centroid path (R·arc_angle)
         arc = float(np.clip(self.arc_angle, 0.4, 2.0 * np.pi - 0.05))
         return float(np.pi * self.tube_a * self.tube_b * self.major_radius * arc)
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+@dataclass
+class Frustum(Primitive):
+    """Truncated cone — a flat-topped taper for flared cups, buckets, flowerpots,
+    lampshades (a plain Cone can only taper to a point). +Z, resting on its
+    ``radius_bottom`` base, centered on its centroid."""
+    radius_bottom: float = 0.04
+    radius_top: float = 0.025
+    height: float = 0.06
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.FRUSTUM)
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        rb = float(max(self.radius_bottom, 1e-3))
+        rt = float(max(self.radius_top, 1e-3))
+        H = float(max(self.height, 2e-3))
+        if abs(rb - rt) < 1e-4:                       # degenerate -> cylinder
+            m = trimesh.creation.cylinder(radius=rb, height=H, sections=48)
+            m.apply_translation([0.0, 0.0, H / 2.0])
+        else:
+            # clip a full cone at z=H: its radius there equals the smaller radius.
+            rmax = max(rb, rt)
+            h_full = H * rmax / (rmax - min(rb, rt))
+            cone = trimesh.creation.cone(radius=rmax, height=h_full, sections=48)
+            if rt > rb:                               # flared (wider top): apex down
+                cone.apply_transform(trimesh.transformations.rotation_matrix(np.pi, [1, 0, 0]))
+                cone.apply_translation([0.0, 0.0, H])
+            clip = trimesh.creation.box(extents=[4 * rmax, 4 * rmax, H])
+            clip.apply_translation([0.0, 0.0, H / 2.0])
+            try:
+                m = cone.intersection(clip)
+            except Exception:                          # no CSG backend -> mid cylinder
+                m = trimesh.creation.cylinder(radius=0.5 * (rb + rt), height=H, sections=48)
+                m.apply_translation([0.0, 0.0, H / 2.0])
+        return _recenter_and_place(m, self.transform)
+
+    def volume(self) -> float:
+        rb, rt, H = self.radius_bottom, self.radius_top, self.height
+        return float(np.pi * H / 3.0 * (rb * rb + rb * rt + rt * rt))
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+@dataclass
+class Hemisphere(Primitive):
+    """Solid half-sphere (dome) for lids, domes, scoops — a flat-bottomed cap
+    instead of a full sphere. +Z, flat face down, centered on its centroid."""
+    radius: float = 0.03
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.HEMISPHERE)
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        r = float(max(self.radius, 2e-3))
+        sphere = trimesh.creation.icosphere(radius=r, subdivisions=3)
+        clip = trimesh.creation.box(extents=[3 * r, 3 * r, 2 * r])
+        clip.apply_translation([0.0, 0.0, r])          # keep the z>=0 half
+        try:
+            m = sphere.intersection(clip)
+        except Exception:
+            m = sphere
+        return _recenter_and_place(m, self.transform)
+
+    def volume(self) -> float:
+        return float(2.0 / 3.0 * np.pi * self.radius ** 3)
 
     def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
         return self._mesh_inertia(density)

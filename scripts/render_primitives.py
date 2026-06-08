@@ -29,7 +29,8 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from primitives import (Box, Cylinder, Sphere, Capsule, Cone, Pyramid,  # noqa: E402
-                        Torus, Ellipsoid, Wedge, HollowShell, Handle)
+                        Torus, Ellipsoid, Wedge, HollowShell, Handle,
+                        Frustum, Hemisphere)
 from cem import PRIMITIVE_SPECS                                          # noqa: E402
 from _render_common import grid                                         # noqa: E402
 
@@ -93,6 +94,16 @@ GALLERY = [
         ("arc=180", Handle(major_radius=0.022, tube_a=0.006, tube_b=0.005, arc_angle=np.pi)),
         ("arc=270 C", Handle(major_radius=0.020, tube_a=0.006, tube_b=0.004, arc_angle=1.5 * np.pi)),
         ("flat tube arc=300", Handle(major_radius=0.020, tube_a=0.008, tube_b=0.004, arc_angle=1.65 * np.pi)),
+    ]),
+    ("Frustum  (3 DOF: radius_bottom, radius_top, height)", [
+        ("taper 40->22", Frustum(radius_bottom=0.040, radius_top=0.022, height=0.060)),
+        ("flared 22->40 cup", Frustum(radius_bottom=0.022, radius_top=0.040, height=0.060)),
+        ("shallow 50->35", Frustum(radius_bottom=0.050, radius_top=0.035, height=0.030)),
+    ]),
+    ("Hemisphere  (1 DOF: radius)", [
+        ("r=20", Hemisphere(radius=0.020)),
+        ("r=35", Hemisphere(radius=0.035)),
+        ("r=55", Hemisphere(radius=0.055)),
     ]),
 ]
 

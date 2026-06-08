@@ -11,7 +11,7 @@ import pytest
 import primitives as P
 from primitives import (
     Box, Cylinder, Sphere, Capsule, Cone, Pyramid, Torus, Ellipsoid, Wedge,
-    HollowShell, Handle, Transform, seat_height,
+    HollowShell, Handle, Frustum, Hemisphere, Transform, seat_height,
 )
 from archetypes import ARCHETYPE_REGISTRY
 from scoring import ObjectScorer, ScoringConfig
@@ -36,6 +36,8 @@ PRIMS = {
                                 height=0.07, floor_thickness=0.005),
     "handle": Handle(major_radius=0.02, tube_a=0.006, tube_b=0.005,
                      arc_angle=1.5 * np.pi),
+    "frustum": Frustum(radius_bottom=0.04, radius_top=0.025, height=0.06),
+    "hemisphere": Hemisphere(radius=0.03),
 }
 
 

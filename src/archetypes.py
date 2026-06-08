@@ -20,7 +20,8 @@ from typing import Callable, Dict
 
 from primitives import (
     CompositeObject, Box, Cylinder, Sphere, Capsule,
-    Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle, seat_height, Transform,
+    Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle, Frustum, Hemisphere,
+    seat_height, Transform,
     # existing v1 factories (registered below)
     create_small_box, create_tall_box, create_flat_box, create_mug_like,
     create_l_shape, create_dumbbell, create_hammer, create_bottle,
@@ -119,6 +120,21 @@ def _handle(R, a, b, arc=1.5 * np.pi, x=0.0, y=0.0, z=None, euler=None):
                   transform=_T(x, y, z, euler))
 
 
+def _frustum(rb, rt, h, x=0.0, y=0.0, z=None, euler=None):
+    """Truncated cone. Default z seats its (rb) base on the ground."""
+    p = Frustum(radius_bottom=rb, radius_top=rt, height=h)
+    z = seat_height(p) if z is None else z
+    p.transform = _T(x, y, z, euler)
+    return p
+
+
+def _hemi(r, x=0.0, y=0.0, z=None, euler=None):
+    p = Hemisphere(radius=r)
+    z = seat_height(p) if z is None else z
+    p.transform = _T(x, y, z, euler)
+    return p
+
+
 def _ell(rx, ry, rz, x=0.0, y=0.0, z=None, euler=None):
     z = rz if z is None else z
     return Ellipsoid(radii=np.array([rx, ry, rz]), transform=_T(x, y, z, euler))
@@ -184,8 +200,8 @@ def create_paintbrush(handle_r: float = 0.008, handle_h: float = 0.12,
 @archetype("plunger")
 def create_plunger(handle_r: float = 0.011, handle_h: float = 0.12,
                    cup_r: float = 0.04, cup_h: float = 0.05) -> CompositeObject:
-    cup = _cone(cup_r, cup_h)
-    handle = _cyl(handle_r, handle_h, z=cup_h / 4 + handle_h / 2 - 0.005)
+    cup = _frustum(cup_r, cup_r * 0.45, cup_h)        # flared rubber bell (not a point)
+    handle = _cyl(handle_r, handle_h, z=cup_h - 0.006 + handle_h / 2)
     return _co("plunger", cup, handle)
 
 
@@ -250,7 +266,7 @@ def create_drill(body_w: float = 0.06, body_h: float = 0.06, body_d: float = 0.0
 def create_ladle(handle_r: float = 0.007, handle_h: float = 0.12,
                  bowl_r: float = 0.03) -> CompositeObject:
     handle = _cyl(handle_r, handle_h)
-    bowl = _sph(bowl_r, z=handle_h - 0.005)
+    bowl = _hemi(bowl_r, z=handle_h - 0.004, euler=[np.pi, 0, 0])   # dome scoop, not a ball
     return _co("ladle", handle, bowl)
 
 
@@ -482,7 +498,8 @@ def create_trophy(base_w: float = 0.05, cup_r: float = 0.03,
                   stem_h: float = 0.04) -> CompositeObject:
     base = _box(base_w, base_w, 0.012, z=0.006)
     stem = _cyl(0.006, stem_h, z=0.012 + stem_h / 2 - 0.002)
-    cup = _cone(cup_r, 0.04, euler=[np.pi, 0, 0], z=0.012 + stem_h + 0.01)
+    # flared open cup (narrow at the stem, wide rim) instead of a solid inverted cone
+    cup = _frustum(0.012, cup_r, 0.045, z=0.01 + stem_h + 0.018)
     return _co("trophy", base, stem, cup)
 
 

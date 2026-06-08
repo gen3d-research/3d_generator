@@ -23,7 +23,7 @@ from pathlib import Path
 
 from primitives import (
     CompositeObject, Primitive, Box, Cylinder, Sphere, Capsule,
-    Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle,
+    Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle, Frustum, Hemisphere,
     Transform, PrimitiveType, seat_height, half_extents,
 )
 from scoring import ObjectScorer, ScoreBreakdown, ScoringConfig
@@ -121,6 +121,17 @@ PRIMITIVE_SPECS: List[PrimitiveSpec] = [
                                             arc_angle=p[3], transform=t),
                   extract=lambda pr: np.array([pr.major_radius, pr.tube_a, pr.tube_b,
                                                pr.arc_angle])),
+    PrimitiveSpec(PrimitiveType.FRUSTUM, ['r_bot', 'r_top', 'height'],
+                  _log(0.04, 0.025, 0.06), np.array([0.3, 0.3, 0.3]),
+                  np.array([0.008, 0.005, 0.02]), np.array([0.08, 0.08, 0.14]),
+                  build=lambda p, t: Frustum(radius_bottom=p[0], radius_top=p[1],
+                                             height=p[2], transform=t),
+                  extract=lambda pr: np.array([pr.radius_bottom, pr.radius_top, pr.height])),
+    PrimitiveSpec(PrimitiveType.HEMISPHERE, ['radius'],
+                  _log(0.03), np.array([0.3]),
+                  np.array([0.012]), np.array([0.08]),
+                  build=lambda p, t: Hemisphere(radius=p[0], transform=t),
+                  extract=lambda pr: np.array([pr.radius])),
 ]
 
 # Default type bias: favor box/cylinder slightly, rest uniform.

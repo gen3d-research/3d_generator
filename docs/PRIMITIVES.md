@@ -1,6 +1,6 @@
 # Primitive & Archetype Library — gallery, math, and fidelity audit
 
-This document (a) catalogs the **9 primitive types** the generator builds objects
+This document (a) catalogs the **13 primitive types** the generator builds objects
 from — with a picture, parameters, degrees of freedom (DOF), clamp ranges, math,
 and **limitations**; (b) audits the hand-written **archetypes** to show which
 real-world shapes are currently *faked* because the primitive set is too small;
@@ -46,9 +46,11 @@ clamped to `[min, max]`):
 | wedge | 3 | width, depth, height | 0.05, 0.04, 0.04 | 0.015, 0.015, 0.015 | 0.14, 0.14, 0.14 |
 | hollow_shell ✨ | 4 | outer, wall, height, floor | 0.035, 0.004, 0.07, 0.005 | 0.012, 0.002, 0.02, 0.002 | 0.06, 0.01, 0.14, 0.012 |
 | handle ✨ | 4 | major, tube_a, tube_b, arc | 0.02, 0.006, 0.005, 4.71 | 0.01, 0.003, 0.003, 1.88 | 0.05, 0.012, 0.012, 5.97 |
+| frustum ✨ | 3 | r_bot, r_top, height | 0.04, 0.025, 0.06 | 0.008, 0.005, 0.02 | 0.08, 0.08, 0.14 |
+| hemisphere ✨ | 1 | radius | 0.03 | 0.012 | 0.08 |
 
-**Total: 28 sampled shape parameters across 11 types** (✨ = the v2.2 hollow_shell
-and handle, added to fix the faked containers/handles audited below). Each primitive also
+**Total: 32 sampled shape parameters across 13 types** (✨ = the audit-driven
+additions: v2.2 hollow_shell + handle, v2.3 frustum + hemisphere). Each primitive also
 carries a 6-DOF `Transform` (position + orientation) set during composition.
 
 ### Math & construction (per type)
@@ -69,6 +71,8 @@ carries a 6-DOF `Transform` (position + orientation) set during composition.
 | **Wedge** | `½ w·d·h` | manual triangular-prism vertices/faces | `_mesh_inertia` |
 | **HollowShell** ✨ | `π(R²H − Rᵢ²(H−floor))` | outer cylinder **minus** inner cavity (CSG / manifold3d) | `_mesh_inertia` |
 | **Handle** ✨ | `π·a·b·R·arc` | manual elliptical-tube sweep along a circular arc, fan-capped | `_mesh_inertia` |
+| **Frustum** ✨ | `π h/3 (r₀²+r₀r₁+r₁²)` | cone **intersected** with a clip box at z=H (CSG) | `_mesh_inertia` |
+| **Hemisphere** ✨ | `2/3 π r³` | `icosphere` **intersected** with the z≥0 half-space (CSG) | `_mesh_inertia` |
 
 ### Limitations (what each type **cannot** represent)
 
@@ -194,10 +198,10 @@ Adding any of these is the standard two-step: a `@dataclass` subclass in
 `PRIMITIVE_SPECS` row in `cem.py` + a `PrimitiveType` enum entry, then a `_helper`
 in `archetypes.py` and a rewrite of the affected archetypes.
 
-> **Status:** 4.1 (hollow shell) and 4.2 (handle) are now **IMPLEMENTED** (v2.2) —
-> see `primitives.py` (`HollowShell`, `Handle`), the two `PRIMITIVE_SPECS` rows in
-> `cem.py`, and the rewired `mug_like`/`cup`/`pot`/`teapot`/`jar`/`bowl` archetypes.
-> 4.3–4.5 (frustum, hemisphere, hex prism) remain proposals.
+> **Status:** 4.1–4.4 are now **IMPLEMENTED** — hollow shell + handle (v2.2),
+> frustum + hemisphere (v2.3) — see `primitives.py`, the `PRIMITIVE_SPECS` rows in
+> `cem.py`, and the rewired archetypes (`mug_like`/`cup`/`pot`/`teapot`/`jar`/`bowl`
+> + `plunger`/`trophy`/`ladle`). Only 4.5 (hex prism) remains a proposal.
 
 ### 4.1 Hollow shell / open container  ★ ✅ IMPLEMENTED
 - **Replaces:** solid-cylinder bodies of `mug_like`, `cup`, `pot`, `jar`, `bowl`; extends to `teapot`/`wine_glass` (round variant) and `funnel` (open cone).
@@ -217,7 +221,7 @@ in `archetypes.py` and a rewrite of the affected archetypes.
 - **Risk:** must overlap the body for connectivity (inner edge `major−tube` penetrates the wall by ~`tube_radius`); cap `arc < 1.9π`.
 - **Recommendation:** start with the **circular tube (3 DOF)**; add the elliptical variant later if handle realism warrants it.
 
-### 4.3 Truncated cone / frustum  ◆ medium impact
+### 4.3 Truncated cone / frustum  ◆ ✅ IMPLEMENTED
 - **Replaces:** `plunger` cup, `trophy` cup; enables flared cups, buckets, flowerpots, lampshades (none expressible today — cone only tapers to a point).
 - **Params (3 DOF):** `radius_bottom`, `radius_top`, `height`.
 - **Math:** `V = π·h/3·(r0² + r0·r1 + r1²)`; inertia via `_mesh_inertia`.
@@ -226,7 +230,7 @@ in `archetypes.py` and a rewrite of the affected archetypes.
 - **Spec row template:** `['r_bot','r_top','height']`, defaults `_log(0.04,0.025,0.06)`, clamp `[0.008,0.005,0.02]…[0.08,0.08,0.14]`.
 - **Risk:** when `r_top→0` it degenerates to a cone (fine); keep both radii `≥ 5 mm`.
 
-### 4.4 Hemisphere / dome  ◆ medium impact
+### 4.4 Hemisphere / dome  ◆ ✅ IMPLEMENTED
 - **Replaces:** `ladle` scoop, `teapot` lid, dome lids; an alternative hollow-`bowl` body.
 - **Params:** `radius` (1 DOF) solid dome, or `radius, thickness` (2 DOF) hollow bowl-cap.
 - **Math:** solid `V = 2/3 π r³`; inertia via `_mesh_inertia`.
@@ -250,10 +254,10 @@ in `archetypes.py` and a rewrite of the affected archetypes.
 |---|---|---|---|---|
 | Hollow shell | 4 | mug, cup, pot, jar, bowl | CSG cylinder − cavity | ✅ **built (v2.2)** |
 | Handle / arc | 4 | mug, cup, pot, teapot | manual elliptical-tube sweep | ✅ **built (v2.2)** |
-| Frustum | 3 | plunger, trophy, buckets, flowerpots | revolve/CSG trapezoid | proposed |
-| Hemisphere | 1–2 | ladle, lids, bowls | revolve quarter-circle | proposed |
+| Frustum | 3 | plunger, trophy, buckets, flowerpots | cone ∩ clip box (CSG) | ✅ **built (v2.3)** |
+| Hemisphere | 1 | ladle, lids, domes | sphere ∩ half-space (CSG) | ✅ **built (v2.3)** |
 | Hex prism | 2 | nut, bolt | `cylinder(sections=6)` | proposed |
 
-**Done (v2.2):** Hollow shell + Handle now fix the mug/cup/pot/teapot/jar/bowl
-family — all six rebuilt and connected; see the archetype gallery. **Next up:**
-frustum + hemisphere (cover the flared/domed remainder), then the hex prism.
+**Done:** v2.2 hollow shell + handle (mug/cup/pot/teapot/jar/bowl) and v2.3
+frustum + hemisphere (plunger/trophy/ladle) — all rebuilt and connected; see the
+archetype gallery. **Remaining proposal:** the hex prism (cosmetic, for fasteners).
