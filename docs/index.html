@@ -97,6 +97,7 @@
         <a class="navbar-item" href="#abstract"><span class="icon"><i class="fas fa-book-open"></i></span><span>Abstract</span></a>
         <a class="navbar-item" href="#method"><span class="icon"><i class="fas fa-cogs"></i></span><span>Method</span></a>
         <a class="navbar-item" href="#shapes"><span class="icon"><i class="fas fa-shapes"></i></span><span>Shapes</span></a>
+        <a class="navbar-item" href="#strategies"><span class="icon"><i class="fas fa-dice"></i></span><span>Strategies</span></a>
         <a class="navbar-item" href="#videos"><span class="icon"><i class="fas fa-video"></i></span><span>Videos</span></a>
         <a class="navbar-item" href="#results"><span class="icon"><i class="fas fa-chart-bar"></i></span><span>Results</span></a>
         <a class="navbar-item" href="#reproduce"><span class="icon"><i class="fas fa-flask"></i></span><span>Reproduce</span></a>
@@ -335,6 +336,70 @@
           </div>
         </div>
       </div>
+    </div>
+  </section>
+
+  <!-- Generation strategies -->
+  <section class="section" id="strategies" style="background:#f9fafb;">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3 has-text-centered">Generation strategies</h2>
+      <p class="has-text-centered" style="max-width:780px;margin:0 auto 1.5rem;">
+        The same generator can be steered with simple constraints on the primitive palette,
+        count, and placement. Below: a systematic sweep of single-type unions (each of the 14
+        types, N&nbsp;=&nbsp;2…10 copies), every two-type pair, and bilaterally-symmetric variants
+        &mdash; alongside curved-only vs faceted-only batches.</p>
+      <div class="columns is-centered">
+        <div class="column is-three-quarters">
+          <div class="figure-container">
+            <img src="./static/images/strategy_single_sweep.png" alt="Single-type unions sweep">
+            <p class="figure-caption">Single-type unions &mdash; rows are the 14 primitive types,
+              columns are N&nbsp;=&nbsp;2…10 copies unioned into one connected body.</p>
+          </div>
+        </div>
+      </div>
+      <div class="columns is-centered">
+        <div class="column is-half">
+          <div class="figure-container">
+            <img src="./static/images/strategy_pairs.png" alt="All type pairs">
+            <p class="figure-caption">All 91 two-type pairs (one of each).</p>
+          </div>
+        </div>
+        <div class="column is-half">
+          <div class="figure-container">
+            <img src="./static/images/strategy_symmetric.png" alt="Symmetric batch">
+            <p class="figure-caption">Bilaterally-symmetric objects (mirror across a plane).</p>
+          </div>
+        </div>
+      </div>
+      <div class="columns is-centered">
+        <div class="column is-half">
+          <div class="figure-container">
+            <img src="./static/images/strategy_curved.png" alt="Curved-only batch">
+            <p class="figure-caption">Curved primitives only.</p>
+          </div>
+        </div>
+        <div class="column is-half">
+          <div class="figure-container">
+            <img src="./static/images/strategy_faceted.png" alt="Faceted-only batch">
+            <p class="figure-caption">Faceted primitives only (box, pyramid, wedge, hex).</p>
+          </div>
+        </div>
+      </div>
+      <h3 class="title is-5 has-text-centered" style="margin-top:1rem;">Archetype varieties</h3>
+      <p class="has-text-centered" style="max-width:780px;margin:0 auto 1rem;">
+        Each hand-written archetype is a parametric template; a per-archetype CEM tunes its
+        parameters to produce many tuned variations.</p>
+      <div class="columns is-centered">
+        <div class="column is-three-quarters">
+          <div class="figure-container">
+            <img src="./static/images/varieties_combined.png" alt="Archetype varieties">
+            <p class="figure-caption">CEM-trained varieties &mdash; each row is one archetype.</p>
+          </div>
+        </div>
+      </div>
+      <p class="has-text-centered" style="margin-top:1rem;">
+        What's next &mdash; new archetypes and primitives on the backlog &mdash; is in
+        <a href="https://github.com/gen3d-research/3d_generator/blob/main/docs/ROADMAP.md"><code>docs/ROADMAP.md</code></a>.</p>
     </div>
   </section>
 
