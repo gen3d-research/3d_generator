@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import subprocess
 import sys
@@ -51,24 +52,38 @@ def spawn_sdf(sdf_path: Path, name: str, x: float, y: float, z: float) -> bool:
         f'pose: {{position: {{x: {x}, y: {y}, z: {z}}}, '
         f'orientation: {{w: 1.0}}}}'
     )
+    # Generous service timeout: under parallel gz worlds the create response can
+    # take well over the old 3 s, which silently turned into spawn_ok=False. The gz
+    # --timeout (ms) must stay BELOW the subprocess timeout (s) so gz returns its own
+    # failure first; either way a transport glitch is caught, not crash-propagated.
+    gz_ms = os.environ.get("GZ_SVC_TIMEOUT_MS", "15000")
+    sub_s = float(os.environ.get("GZ_SVC_SUBPROC_S", "22"))
     cmd = [
         "gz", "service", "-s", f"/world/{WORLD_NAME}/create",
         "--reqtype", "gz.msgs.EntityFactory",
         "--reptype", "gz.msgs.Boolean",
-        "--timeout", "3000",
+        "--timeout", gz_ms,
         "--req", req,
     ]
-    proc = _run(cmd, timeout=8.0)
+    try:
+        proc = _run(cmd, timeout=sub_s)
+    except subprocess.SubprocessError:
+        return False
     return proc.returncode == 0 and b"data: true" in proc.stdout
 
 
 def despawn(name: str):
+    gz_ms = os.environ.get("GZ_SVC_TIMEOUT_MS", "15000")
+    sub_s = float(os.environ.get("GZ_SVC_SUBPROC_S", "22"))
     req = f'name: "{name}", type: MODEL'
-    _run([
-        "gz", "service", "-s", f"/world/{WORLD_NAME}/remove",
-        "--reqtype", "gz.msgs.Entity", "--reptype", "gz.msgs.Boolean",
-        "--timeout", "3000", "--req", req,
-    ], timeout=6.0)
+    try:
+        _run([
+            "gz", "service", "-s", f"/world/{WORLD_NAME}/remove",
+            "--reqtype", "gz.msgs.Entity", "--reptype", "gz.msgs.Boolean",
+            "--timeout", gz_ms, "--req", req,
+        ], timeout=sub_s)
+    except subprocess.SubprocessError:
+        pass   # a stale model left in the world is fine — query_pose filters by name
 
 
 # Parse one snapshot of /world/<world>/pose/info text output into a name->pose dict.
@@ -85,7 +100,7 @@ def _parse_vec(text: str) -> dict:
     return {k: float(v) for k, v in _VEC_RE.findall(text)}
 
 
-def query_pose(name: str, max_messages: int = 6, timeout: float = 5.0
+def query_pose(name: str, max_messages: int = 4, timeout: float = 12.0
                ) -> Optional[dict]:
     """Read /world/<world>/pose/info messages until *name* (or its main link)
     appears, then return its decoded pose.
@@ -186,7 +201,11 @@ def main():
     for k, entry in enumerate(manifest):
         print(f"[{k+1}/{len(manifest)}] {entry['name']} ({entry['method']})",
               flush=True)
-        results.append(evaluate_one(entry, cfg))
+        try:
+            results.append(evaluate_one(entry, cfg))
+        except Exception as e:   # never let one object kill the whole worker
+            results.append({"name": entry.get("name"), "method": entry.get("method"),
+                            "spawn_ok": False, "stable": False, "reason": f"error:{e}"})
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps({"results": results, "config": cfg}, indent=2))
