@@ -304,6 +304,14 @@ archetype; `visual_demo.launch.py method:=mug_like` cycles just that archetype's
 > ROS 2 sim is sequential (~3–5 s/object). 105 archetypes × 100 = 10,500 objects is hours of
 > CPU and 10+ hours of sim. For the sim, scope it down (fewer `--variants` or a subset of
 > `--archetypes`); the pure-CPU grasp/diversity eval can run on the full set.
+>
+> **gz server stability.** The Gazebo server tends to **die after ~20 sequential spawns**
+> (`process has died … exit code -9`), so a single long drop-test run silently reports
+> `spawn_ok=False` for everything after that point — *not* a problem with those objects (run
+> them in isolation and they spawn + settle fine). For batches bigger than ~15–20, **restart
+> the world between chunks**: loop `--max-objects 15` over slices of the manifest, killing
+> `gz sim` and relaunching `stability_world.launch.py` each chunk (this is what
+> `scripts/run_multi_seed.sh` does per seed).
 
 ---
 
