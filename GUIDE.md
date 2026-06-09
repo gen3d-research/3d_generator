@@ -1,9 +1,9 @@
 # Guide — generate, visualize, and test parts
 
 End-to-end walkthrough: **train the generator → generate parts → visualize them →
-drop-test and pick-and-place them in ROS 2 / Gazebo.** For the full paper-number
-reproduction see [`REPRODUCE.md`](REPRODUCE.md); for the recorded demo videos see
-[`DEMO.md`](DEMO.md).
+drop-test and pick-and-place them in ROS 2 / Gazebo.** Every command below lists what
+each flag does. For the full paper-number reproduction see [`REPRODUCE.md`](REPRODUCE.md);
+for the recorded demo videos see [`DEMO.md`](DEMO.md).
 
 The library has **19 primitive types** and **105 hand-written archetypes**
 (see [`docs/PRIMITIVES.md`](docs/PRIMITIVES.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md)).
@@ -15,15 +15,19 @@ The library has **19 primitive types** and **105 hand-written archetypes**
 ```bash
 python3 -m venv ~/venv/3d_cem
 source ~/venv/3d_cem/bin/activate
-pip install -r requirements.txt          # numpy, scipy, trimesh, pyyaml, cma, matplotlib, manifold3d
+pip install -r requirements.txt
 ```
 
-Run every command below from the repo root (`3d_generator/`). The scripts add
-`src/` to `sys.path` themselves. If ROS 2 is sourced in your shell, prefix the
-pure-Python commands with `env -u PYTHONPATH` so its pytest/plugin paths don't leak in.
+- `python3 -m venv ~/venv/3d_cem` — create an isolated virtual environment at that path
+  (kept outside the repo so build artefacts don't churn it).
+- `source ~/venv/3d_cem/bin/activate` — activate it in the current shell (run once per shell).
+- `pip install -r requirements.txt` — install the deps: numpy, scipy, trimesh, pyyaml, cma,
+  matplotlib, manifold3d (the CSG backend used by hollow/rounded/tube primitives).
 
-The ROS 2 parts (§5–§6) additionally need **ROS 2 Jazzy + Gazebo (gz)** and a one-time
-`colcon build` (see §5).
+Run every command below from the repo root (`3d_generator/`). The scripts add `src/` to
+`sys.path` themselves. If ROS 2 is sourced in your shell, prefix the pure-Python commands
+with **`env -u PYTHONPATH`** so its pytest/plugin paths don't leak in. The ROS 2 parts
+(§5–§6) need **ROS 2 Jazzy + Gazebo (gz)** and a one-time `colcon build` (§4).
 
 ---
 
@@ -32,24 +36,42 @@ The ROS 2 parts (§5–§6) additionally need **ROS 2 Jazzy + Gazebo (gz)** and 
 The pipeline is **sample → score → CEM update → export**. No datasets, no GPU.
 
 ```bash
-# Quick sanity check (brief training, 5 objects)
 python src/main.py demo
+```
+- `demo` — subcommand: brief training + 5 objects, a quick sanity check (no flags).
 
-# Train the CEM and generate 100 quality-filtered objects -> URDF/SDF/meshes/metadata
+```bash
 python src/main.py generate -n 100 -o output/objects \
     --train --iterations 30 --samples 100 --seed 42 \
     --save-generator output/trained_generator.json
+```
+- `generate` — subcommand: produce objects and (optionally) export them.
+- `-n 100` — **number of objects** to generate after training (default 10).
+- `-o output/objects` — **output directory**; each object becomes
+  `object_XXXX/{*.urdf,*.sdf,meshes/*.obj,*_metadata.yaml}`. Omit to score in-memory
+  without writing files.
+- `--train` — **train the CEM first** (otherwise it samples from the untrained prior).
+- `--iterations 30` — **CEM iterations** while training (more = better-converged
+  distribution, linear cost; default 30).
+- `--samples 100` — **candidate objects scored per iteration** (the CEM keeps the top 20%
+  as elites each round; default 100).
+- `--seed 42` — **RNG seed** for reproducible objects (default 42).
+- `--save-generator output/trained_generator.json` — **persist the trained distribution**
+  to JSON so you can reload it later instead of retraining.
+- *(other flags)* `--prefix NAME` sets the object filename prefix (default `object`);
+  `--no-filter` disables the connectivity/score/grasp quality gate (keeps every sample).
 
-# Export the whole hand-written archetype set
+```bash
 python src/main.py archetypes -o output/archetypes
+```
+- `archetypes` — subcommand: export the whole hand-written archetype set.
+- `-o output/archetypes` — **output directory** (required for this subcommand).
 
-# Score a single mesh (size / stability / graspability / complexity / validity)
+```bash
 python src/main.py score output/objects/object_0000/meshes/object_0000_visual.obj
 ```
-
-Each generated object writes `object_XXXX.urdf`, `object_XXXX.sdf`,
-`meshes/*_visual.obj`, `meshes/*_collision.obj`, and `*_metadata.yaml`
-(mass + inertia from the union solid, randomized friction).
+- `score` — subcommand: print the 6-component score (size / stability / graspability /
+  complexity / validity / assembly) for one mesh file (positional path argument).
 
 **Python API:**
 
@@ -62,72 +84,94 @@ gen.export_all(objects, "output/objects")
 gen.save("output/trained_generator.json")
 ```
 
-Knobs that matter (`GeneratorConfig`): `max_primitives` (default 16),
-`require_connected`, `rerank_by_grasp`, `low_grasp_gate` (penalize ungraspable
-cones/pyramids), `use_mesh_inertia`. `generator.paper_repro_generator()` returns a
-v1/paper-configured generator (4 primitive types, no gate).
+`GeneratorConfig` knobs: `max_primitives` (default 16), `require_connected`,
+`rerank_by_grasp`, `low_grasp_gate` (penalize ungraspable cones/pyramids),
+`use_mesh_inertia`. `generator.paper_repro_generator()` returns the v1/paper config.
 
 ---
 
 ## 2. Visualize parts
 
-All renderers are **headless** (matplotlib Agg) and write PNGs under
-`docs/gallery/` (and copy a few to `docs/static/images/` for the website).
+All renderers are **headless** (matplotlib Agg) and write PNGs under `docs/gallery/`.
 
 ```bash
-# (a) Primitive library — the 19 types, each with 3 variants showing its DOF
-python scripts/render_primitives.py                 # -> docs/gallery/primitives.png
-python scripts/render_primitives.py --emit-doc      # markdown spec table for the docs
+python scripts/render_primitives.py
+python scripts/render_primitives.py --emit-doc
+```
+- *(no flags)* — render the 19 primitive types × 3 variants → `docs/gallery/primitives.png`.
+- `--emit-doc` — instead of rendering, print the markdown parameter/clamp table (used to keep
+  the docs in sync with `PRIMITIVE_SPECS`).
 
-# (b) Archetype gallery (all 105) + a 16-object trained-CEM sample sheet
-python scripts/render_gallery.py                    # -> archetypes.png, v2_samples.png
+```bash
+python scripts/render_gallery.py
+```
+- *(no flags)* — render all 105 archetypes → `archetypes.png` and a 16-object trained-CEM
+  sample sheet → `v2_samples.png`. (`--cols N` sets grid width.)
 
-# (c) Accepted / rejected / optimized sample galleries
-python scripts/render_samples.py                    # -> samples_verdicts.png, samples_optimized.png
+```bash
+python scripts/gen_strategies.py --strategy all
+python scripts/gen_strategies.py --strategy single --copy-web
+```
+- `--strategy all` — run every constrained-generation strategy. Other values:
+  `single` (each type × N=2..10 copies unioned, + symmetric on prime N), `pairs`
+  (every two-type pair, + symmetric), `curved` / `faceted` (palette-restricted batches),
+  `oneofeach` (one union of all types), `symmetric` (bilaterally-symmetric batch),
+  `default` (mixed baseline). Each writes `docs/gallery/strategy_<name>.png`.
+- `--copy-web` — also copy the PNGs into `docs/static/images/` for the website.
+- *(other flags)* `--n 12` objects per batch; `--cols 6` grid width; `--seed 42`;
+  `--train` trains the baseline first; `--max-primitives` caps parts.
 
-# (d) Generation STRATEGIES — systematic constrained sweeps
-python scripts/gen_strategies.py --strategy all     # -> strategy_*.png
-#   single  : 19 types x N=2..10 copies unioned (+ symmetric on prime N)
-#   pairs   : every two-type pair (+ symmetric)
-#   curved / faceted : palette-restricted batches
-#   oneofeach : one connected union of all types
-#   symmetric : bilaterally-symmetric batch
-python scripts/gen_strategies.py --strategy single --copy-web   # just one strategy
-
-# (e) CEM-trained parameter VARIETIES of representative archetypes
-python scripts/render_archetype_varieties.py --subset --combined   # -> varieties_combined.png
+```bash
+python scripts/render_archetype_varieties.py --subset --combined
 python scripts/render_archetype_varieties.py --archetypes cup,jar,nut --k 12
 ```
+- `--subset` — use the curated ~10-archetype representative set (one per group + containers).
+- `--combined` — emit one grid (rows = archetypes) instead of one PNG per archetype.
+- `--archetypes cup,jar,nut` — explicit comma-separated archetype names instead of the subset.
+- `--k 12` — **varieties per archetype** to sample (default 10).
+- *(other flags)* `--all` (every archetype, big); `--iters 20` / `--samples 50` (per-archetype
+  CEM training budget); `--no-train` (raw sampled varieties, skip CEM tuning); `--cols`,
+  `--seed`, `--copy-web`.
 
-Open the PNGs directly, or open `docs/index.html` — the **Shapes** and **Strategies**
-sections embed the galleries.
+Open the PNGs directly, or open `docs/index.html` (Shapes / Strategies sections).
 
 ---
 
 ## 3. Build a manifest (objects + grasps) for the sim tests
 
 The ROS 2 drop/pick tests consume an **eval manifest**: per-method objects exported to
-URDF/SDF with synthesized force-closure grasp candidates. This trains all five methods
-(CEM + CMA-ES / GA / random / fixed-CAD baselines), exports the top-K of each, and
-synthesizes grasps.
+URDF/SDF with synthesized force-closure grasp candidates.
 
 ```bash
 python scripts/build_eval_manifest.py \
     --budget 1500 --top-k 25 --seed 42 \
     --out output/seed_42/eval_manifest.json \
     --export-root output/seed_42/manifest_objects
-python scripts/patch_sdf_collision.py \
-    --manifest output/seed_42/eval_manifest.json     # stiff contact + high friction for grasping
 ```
+- `--budget 1500` — **candidates each method evaluates** before selecting elites (bigger =
+  longer search, linear cost; paper setting 1500, default 600).
+- `--top-k 25` — **objects kept per method** in the manifest (5 methods × 25 = 125 objects).
+- `--seed 42` — RNG seed.
+- `--out PATH` — where to write the manifest JSON.
+- `--export-root DIR` — directory for the exported URDF/SDF/mesh files the manifest points at.
+- *(other flags)* `--methods cem cmaes ga random_search fixed_cad` (which methods to include);
+  `--n-grasps 12` (max grasp candidates synthesized per object).
 
-`--top-k 25` → 5 methods × 25 = 125 objects. Raise `--budget` for a longer search,
-`--top-k` for more objects per method. The pure-CPU **grasp success / diversity**
-metrics come from:
+```bash
+python scripts/patch_sdf_collision.py --manifest output/seed_42/eval_manifest.json
+```
+- `--manifest PATH` — rewrite every SDF in this manifest with **stiff contact + high friction**
+  (so the gripper can actually hold objects) and remove any legacy weld joint. Idempotent.
 
 ```bash
 python scripts/run_unified_eval.py --budget 1500 --top-k 100 --seed 42 \
     --out output/seed_42/unified_eval.json
 ```
+- `--budget` / `--seed` — as above.
+- `--top-k 100` — evaluate the full top-100 population per method (CPU grasp-success +
+  diversity; default 100, independent of the manifest's top-k).
+- `--out PATH` — output JSON (per-method force-closure grasp rate, feature/Chamfer diversity,
+  suitability score).
 
 ---
 
@@ -140,6 +184,10 @@ colcon build --packages-select generated_objects_eval
 source install/setup.bash
 cd ..
 ```
+- `source /opt/ros/jazzy/setup.bash` — put ROS 2 Jazzy on the path.
+- `colcon build --packages-select generated_objects_eval` — build **only** this package
+  (faster than building the whole workspace).
+- `source install/setup.bash` — overlay the freshly-built package onto the environment.
 
 Needs `ros-jazzy-moveit`, `ros-jazzy-moveit-py`, the Panda MoveIt config/description,
 `ros-jazzy-ros-gz-sim`, and `gz_ros2_control` (see [`REPRODUCE.md`](REPRODUCE.md) §0).
@@ -148,38 +196,46 @@ Needs `ros-jazzy-moveit`, `ros-jazzy-moveit-py`, the Panda MoveIt config/descrip
 
 ## 5. Drop test (Gazebo dynamic stability)
 
-Spawns each manifest object 5 cm above the table in `panda_eval_world`, lets physics
-settle, then measures **vertical drift** and **tilt** — "stable" iff drift < 5 cm and
-tilt < 25° (`config/eval_config.yaml`).
+Spawns each manifest object ~5 cm above the table in `panda_eval_world`, lets physics settle,
+then measures **vertical drift** (from the table top, the expected rest height) and **tilt** —
+"stable" iff drift < 5 cm and tilt < 25° (`config/eval_config.yaml`).
 
 ```bash
-# Terminal A — the world (headless server). Use *_gui for a visible window.
+# Terminal A — the world (headless server). Use stability_world_gui.launch.py for a window.
 ros2 launch generated_objects_eval stability_world.launch.py
+```
+- `ros2 launch <pkg> <file>` — start the Gazebo world that the evaluator spawns objects into.
+  No arguments needed; `_gui` variant opens the gz window (for recording).
 
+```bash
 # Terminal B — drop every object and score it
-ros2 run generated_objects_eval gazebo_stability_eval \
+ros2_ws/install/generated_objects_eval/bin/gazebo_stability_eval \
     --manifest $(pwd)/output/seed_42/eval_manifest.json \
     --out $(pwd)/output/seed_42/gazebo_stability.json \
     --max-objects 25
 ```
+- We call the **binary directly** (this node is registered as a console script, not via
+  `ros2 run`). `$(pwd)/...` makes the paths absolute so gz finds the SDFs.
+- `--manifest PATH` — the manifest whose objects to drop (any manifest with `sdf` paths;
+  hand-write a one-entry manifest to drop a single specific part).
+- `--out PATH` — per-object results JSON (`spawn_ok`, `stable`, `tilt_deg`, `drift_m`,
+  `final_pose`).
+- `--max-objects 25` — cap how many to test (**0 = all**, the default). Use a small number
+  for a quick check or a short video.
+- *(other flags)* `--config PATH` — override `eval_config.yaml` (spawn pose, settle time,
+  drift/tilt tolerances).
 
-It prints a per-method summary (`spawn_ok`, `stable`, `rate=%`) and writes per-object
-`{spawn_ok, stable, tilt_deg, drift_m, final_pose}` to the JSON. To drop a **specific**
-generated part, point `--manifest` at any manifest containing it (or hand-write a
-one-entry manifest with its `sdf` path).
-
-> Kill stale sims between runs: `pkill -KILL -f "gz sim"`. The gz transport routes
-> `/world/.../create` non-deterministically if two same-world servers are alive.
+It prints a per-method summary (`spawn_ok`, `stable`, `rate=%`). Kill stale sims between runs:
+`pkill -KILL -f "gz sim"` (two same-world servers fight over the spawn service).
 
 ---
 
 ## 6. Pick-and-place test (MoveIt 2 + Gazebo, with physics)
 
 The Panda runs an **8-stage** pick-and-place under `gz_ros2_control`:
-*ready → pre-grasp → grasp → lift → transport → place → retract*. The object is held by
-**genuine finger friction** (effort-controlled gripper), the table is published as a
-MoveIt `CollisionObject` so RRTConnect plans around it, and the object's **real
-collision mesh** is added to the planning scene.
+*ready → pre-grasp → grasp → lift → transport → place → retract*. The object is held by genuine
+finger friction (effort-controlled gripper), the table is a MoveIt `CollisionObject`, and the
+object's real collision mesh is added to the planning scene.
 
 ```bash
 source ros2_ws/install/setup.bash
@@ -187,22 +243,33 @@ ros2 launch generated_objects_eval visual_demo.launch.py \
     manifest:=$(pwd)/output/seed_42/eval_manifest.json \
     method:=cem use_gz_control:=true loop:=true
 ```
+- `manifest:=PATH` — which manifest to pull objects from (auto-detects `output/seed_42/...`
+  if omitted).
+- `method:=cem` — which generator's objects to cycle: `cem | cmaes | ga | random_search |
+  fixed_cad` (default `cem`).
+- `use_gz_control:=true` — **the arm actually moves in physics** under `gz_ros2_control`. Set
+  `false` (default) for a faster RViz-only animation (no Gazebo controllers).
+- `loop:=true` — keep cycling objects indefinitely (good for screen-recording; default true).
+- *(other args)* `headless:=true` runs gz server-only (no window); `render_engine:=ogre`
+  falls back from `ogre2` for hybrid-GPU laptops.
 
-- `use_gz_control:=true` → the arm actually moves in physics (omit for a faster
-  RViz-only animation).
-- `method:=cem|cmaes|ga|random_search|fixed_cad` → which method's objects to cycle.
-- A different random object spawns each cycle; pin one with the driver's
-  `--object-index N` / `--spawn-x/-y/-z`.
-- `headless:=true` runs gz server-only; `render_engine:=ogre` for hybrid GPUs.
+To pin a **specific** object / spawn pose, run the driver directly with
+`--object-index N`, `--spawn-x/-y/-z`, `--place-dx/-dy/-dz` (see `DEMO.md`).
 
-**Headless / batch MoveIt-plan success** (no window) — plans to every grasp pose and
-records success rate:
+**Headless / batch MoveIt-plan success** (no window) — plans to every grasp pose, records the
+success rate:
 
 ```bash
 ros2 launch generated_objects_eval moveit_planning_eval.launch.py \
     manifest:=$(pwd)/output/seed_42/eval_manifest.json \
-    out:=$(pwd)/output/seed_42/moveit_results.json max_objects:=0
+    out:=$(pwd)/output/seed_42/moveit_results.json \
+    max_objects:=30
 ```
+- `manifest:=PATH` — objects to plan grasps for.
+- `out:=PATH` — results JSON (per object: `n_grasps`, `n_success`, `any_success`).
+- `max_objects:=30` — cap objects (**0 = all**). `moveit_py` 2.12 segfaults on shutdown
+  *after* writing the JSON — wait for `"Wrote N results"` then Ctrl-C (or use
+  `scripts/run_multi_seed.sh`, which polls + kills automatically).
 
 See [`DEMO.md`](DEMO.md) for recording the videos, RViz tips, and GPU/`libEGL` gotchas.
 
@@ -211,11 +278,17 @@ See [`DEMO.md`](DEMO.md) for recording the videos, RViz tips, and GPU/`libEGL` g
 ## 7. Full evaluation (all metrics, all seeds)
 
 ```bash
-bash scripts/run_multi_seed.sh 42 43 44          # manifest + grasp + MoveIt + Gazebo per seed
-python scripts/aggregate_seeds.py 42 43 44 --out output/aggregated.json
-cp output/aggregated.json docs/data/results.json # refresh the project page table
+bash scripts/run_multi_seed.sh 42 43 44
 ```
+- Positional args `42 43 44` — **the seeds** to run. For each, it builds the manifest, patches
+  SDFs, and runs the grasp + MoveIt + Gazebo metrics into `output/seed_<N>/`. ~20 min/seed.
 
-`aggregate_seeds.py` prints a markdown table (force-closure grasp %, MoveIt plan %,
-Gazebo stable %, diversity) with 95% CIs and a CEM-vs-best significance test. Full
-details + tolerances in [`REPRODUCE.md`](REPRODUCE.md).
+```bash
+python scripts/aggregate_seeds.py 42 43 44 --out output/aggregated.json
+cp output/aggregated.json docs/data/results.json
+```
+- Positional args `42 43 44` — **the seeds to aggregate** (must already have been run).
+- `--out PATH` — combined JSON (per-method means, 95% CIs, CEM-vs-best significance test).
+  It also prints a markdown table. The `cp` refreshes the project-page numbers.
+
+Full details + reproduction tolerances in [`REPRODUCE.md`](REPRODUCE.md).
