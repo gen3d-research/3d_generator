@@ -5,8 +5,10 @@
 > next two primitives (**rounded box**, **gear/star prism**) are built too, with
 > `gear_like` rewired to real teeth and tablet/usb_stick/smartwatch to rounded
 > bodies, plus soap_bar/key_fob/star_knob — **18 primitives, 96 archetypes**. The
-> remaining primitives (dish/plate, extrusion, helix, saddle) and archetypes below
-> are still open.
+> remaining primitives (dish/plate, extrusion, helix, saddle) are still open.
+> **Update (v2.8):** the rest of **Section A** is built too (watering_can,
+> measuring_cup, coffee_press, nut_driver, birdhouse + trophy rebuilt with ear
+> handles) — **101 archetypes**. Section A is now complete.
 
 The fidelity audit ([`PRIMITIVES.md`](PRIMITIVES.md)) took the primitive set from 9 → 14
 (hollow_shell, handle, frustum, hemisphere, hex_prism) and added a graspability gate + a
@@ -23,7 +25,7 @@ pattern). Keep containers **open** — a sealed cavity reads as two surfaces and
 
 ---
 
-## A. New archetypes unlocked by the current 14 primitives
+## A. New archetypes unlocked by the current primitives  ✅ ALL BUILT
 
 Each is a multi-part composite (parts overlap → one connected body). "Leans on" = the
 audit-added primitive that makes it look right.

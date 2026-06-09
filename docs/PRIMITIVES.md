@@ -102,7 +102,7 @@ This is the crux of the audit — every limitation below forces an archetype to
 
 ## 2. Archetype library & fidelity audit
 
-The 96 hand-written archetypes (`src/archetypes.py` + 20 v1 factories in
+The 101 hand-written archetypes (`src/archetypes.py` + 20 v1 factories in
 `src/primitives.py`) are the "ground-truth" shapes the generator is meant to
 approximate. Multi-part archetypes deliberately **overlap** their parts so the
 union is one connected body.

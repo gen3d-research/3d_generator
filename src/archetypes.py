@@ -525,8 +525,13 @@ def create_trophy(base_w: float = 0.05, cup_r: float = 0.03,
     base = _box(base_w, base_w, 0.012, z=0.006)
     stem = _cyl(0.006, stem_h, z=0.012 + stem_h / 2 - 0.002)
     # flared open cup (narrow at the stem, wide rim) instead of a solid inverted cone
-    cup = _frustum(0.012, cup_r, 0.045, z=0.01 + stem_h + 0.018)
-    return _co("trophy", base, stem, cup)
+    cz = 0.01 + stem_h + 0.018
+    cup = _frustum(0.012, cup_r, 0.045, z=cz)
+    # the loving-cup ears: a C-handle on each side of the rim
+    h_r = cup_r * 0.7
+    hl = _handle(h_r, 0.004, 0.003, arc=np.pi, x=cup_r - 0.002, z=cz + 0.015, euler=[np.pi / 2, 0, 0])
+    hr = _handle(h_r, 0.004, 0.003, arc=np.pi, x=-cup_r + 0.002, z=cz + 0.015, euler=[np.pi / 2, 0, np.pi])
+    return _co("trophy", base, stem, cup, hl, hr)
 
 
 @archetype("baseball_bat")
@@ -807,6 +812,50 @@ def create_star_knob(r: float = 0.03, h: float = 0.018, points: int = 6) -> Comp
     star = _gear(points, r, r * 0.55, h)                            # deep lobes = a knob
     shaft = _cyl(0.006, 0.03, z=h + 0.012)
     return _co("star_knob", star, shaft)
+
+
+@archetype("watering_can")
+def create_watering_can(r: float = 0.042, h: float = 0.06) -> CompositeObject:
+    body = _shell(r, 0.004, h, floor=0.006)
+    handle = _handle(0.02, 0.005, 0.004, arc=1.4 * np.pi,
+                     x=-r + 0.002, z=h * 0.65, euler=[np.pi / 2, 0, np.pi])
+    spout = _cyl(0.007, 0.085, x=r + 0.02, z=h * 0.7, euler=[0, -0.85, 0])
+    return _co("watering_can", body, handle, spout)
+
+
+@archetype("measuring_cup")
+def create_measuring_cup(r: float = 0.04, h: float = 0.058) -> CompositeObject:
+    body = _shell(r, 0.004, h, floor=0.005)
+    handle = _handle(0.02, 0.006, 0.004, arc=1.5 * np.pi,
+                     x=r + 0.001, z=h * 0.55, euler=[np.pi / 2, 0, 0])
+    lip = _cone(0.012, 0.018, x=-r + 0.003, z=h - 0.004, euler=[0, -0.7, 0])  # pouring spout
+    return _co("measuring_cup", body, handle, lip)
+
+
+@archetype("coffee_press")
+def create_coffee_press(r: float = 0.04, h: float = 0.10) -> CompositeObject:
+    carafe = _shell(r, 0.004, h, floor=0.006)
+    rod = _cyl(0.004, h + 0.04, z=(h + 0.04) / 2)                   # plunger through the lid
+    knob = _sph(0.013, z=h + 0.04)
+    handle = _handle(0.022, 0.006, 0.004, arc=1.5 * np.pi,
+                     x=r + 0.001, z=h * 0.5, euler=[np.pi / 2, 0, 0])
+    return _co("coffee_press", carafe, rod, knob, handle)
+
+
+@archetype("nut_driver")
+def create_nut_driver(grip_r: float = 0.014, grip_h: float = 0.05) -> CompositeObject:
+    grip = _cyl(grip_r, grip_h)
+    shaft = _cyl(0.004, 0.05, z=grip_h + 0.02)
+    socket = _hex(0.011, 0.016, z=grip_h + 0.045 + 0.006)          # hex socket tip
+    return _co("nut_driver", grip, shaft, socket)
+
+
+@archetype("birdhouse")
+def create_birdhouse(w: float = 0.05, h: float = 0.06) -> CompositeObject:
+    body = _box(w, w, h, z=h / 2)
+    roof = _pyr(w * 0.85, 0.032, z=h + 0.003)                      # pitched roof, seated on the body
+    perch = _cyl(0.004, 0.025, y=w / 2 + 0.006, z=h * 0.55, euler=[np.pi / 2, 0, 0])
+    return _co("birdhouse", body, roof, perch)
 
 
 # ---------------------------------------------------------------------------

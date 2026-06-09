@@ -25,7 +25,7 @@ limits generation quality.
 
 ## Archetype library (`archetypes.png`)
 
-All 96 hand-written archetypes in `ARCHETYPE_REGISTRY` (`src/archetypes.py`),
+All 101 hand-written archetypes in `ARCHETYPE_REGISTRY` (`src/archetypes.py`),
 built from the 18 primitive types (box, cylinder, sphere, capsule, cone, pyramid,
 torus, ellipsoid, wedge). Each is a single connected body.
 
