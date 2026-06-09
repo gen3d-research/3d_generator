@@ -1,6 +1,6 @@
 # Primitive & Archetype Library — gallery, math, and fidelity audit
 
-This document (a) catalogs the **16 primitive types** the generator builds objects
+This document (a) catalogs the **18 primitive types** the generator builds objects
 from — with a picture, parameters, degrees of freedom (DOF), clamp ranges, math,
 and **limitations**; (b) audits the hand-written **archetypes** to show which
 real-world shapes are currently *faked* because the primitive set is too small;
@@ -51,10 +51,12 @@ clamped to `[min, max]`):
 | hex_prism ✨ | 2 | radius, height | 0.018, 0.012 | 0.006, 0.004 | 0.04, 0.05 |
 | open_tube ✨ | 3 | outer, wall, height | 0.02, 0.005, 0.05 | 0.008, 0.002, 0.015 | 0.05, 0.012, 0.14 |
 | ngon_prism ✨ | 3 | n_sides, radius, height | 5, 0.02, 0.03 | 3, 0.008, 0.01 | 8, 0.05, 0.08 |
+| rounded_box ✨ | 4 | dx, dy, dz, fillet | 0.06, 0.04, 0.03, 0.008 | 0.02, 0.02, 0.015, 0.003 | 0.12, 0.12, 0.1, 0.015 |
+| gear_prism ✨ | 4 | n_teeth, r_outer, r_inner, height | 8, 0.03, 0.022, 0.015 | 5, 0.015, 0.01, 0.006 | 12, 0.05, 0.04, 0.04 |
 
-**Total: 40 sampled shape parameters across 16 types** (✨ = the audit-driven
+**Total: 48 sampled shape parameters across 18 types** (✨ = the audit-driven
 additions: v2.2 hollow_shell + handle, v2.3 frustum + hemisphere, v2.5 hex_prism,
-v2.6 open_tube + ngon_prism). Each primitive also
+v2.6 open_tube + ngon_prism, v2.7 rounded_box + gear_prism). Each primitive also
 carries a 6-DOF `Transform` (position + orientation) set during composition.
 
 ### Math & construction (per type)
@@ -80,6 +82,8 @@ carries a 6-DOF `Transform` (position + orientation) set during composition.
 | **HexPrism** ✨ | `3√3/2 · r² h` | `cylinder(sections=6)` | `_mesh_inertia` |
 | **OpenTube** ✨ | `π(R²−Rᵢ²) h` | cylinder **minus** cylinder (open both ends, CSG) | `_mesh_inertia` |
 | **NGonPrism** ✨ | `n/2 · r² sin(2π/n) · h` | `cylinder(sections=n)`, n∈3..8 | `_mesh_inertia` |
+| **RoundedBox** ✨ | `lwh + 2r(lw+lh+wh) + πr²(l+w+h) + 4/3πr³` | **convex hull** of 8 corner spheres (= box⊕ball) | `_mesh_inertia` |
+| **GearPrism** ✨ | `n·r₀·rᵢ·sin(π/n)·h` | manual alternating-radius star prism (fan-capped) | `_mesh_inertia` |
 
 ### Limitations (what each type **cannot** represent)
 
@@ -98,7 +102,7 @@ This is the crux of the audit — every limitation below forces an archetype to
 
 ## 2. Archetype library & fidelity audit
 
-The 93 hand-written archetypes (`src/archetypes.py` + 20 v1 factories in
+The 96 hand-written archetypes (`src/archetypes.py` + 20 v1 factories in
 `src/primitives.py`) are the "ground-truth" shapes the generator is meant to
 approximate. Multi-part archetypes deliberately **overlap** their parts so the
 union is one connected body.

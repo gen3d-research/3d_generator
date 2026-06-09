@@ -21,7 +21,7 @@ from typing import Callable, Dict
 from primitives import (
     CompositeObject, Box, Cylinder, Sphere, Capsule,
     Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle, Frustum, Hemisphere,
-    HexPrism, OpenTube, NGonPrism, seat_height, Transform,
+    HexPrism, OpenTube, NGonPrism, RoundedBox, GearPrism, seat_height, Transform,
     # existing v1 factories (registered below)
     create_small_box, create_tall_box, create_flat_box, create_mug_like,
     create_l_shape, create_dumbbell, create_hammer, create_bottle,
@@ -148,6 +148,17 @@ def _tube(R, wall, h, x=0.0, y=0.0, z=None, euler=None):
 def _ngon(n, r, h, x=0.0, y=0.0, z=None, euler=None):
     z = h / 2 if z is None else z
     return NGonPrism(n_sides=n, radius=r, height=h, transform=_T(x, y, z, euler))
+
+
+def _rbox(dims, fillet, x=0.0, y=0.0, z=None, euler=None):
+    dims = np.asarray(dims, float)
+    z = dims[2] / 2 if z is None else z
+    return RoundedBox(dimensions=dims, fillet=fillet, transform=_T(x, y, z, euler))
+
+
+def _gear(nt, ro, ri, h, x=0.0, y=0.0, z=None, euler=None):
+    z = h / 2 if z is None else z
+    return GearPrism(n_teeth=nt, r_outer=ro, r_inner=ri, height=h, transform=_T(x, y, z, euler))
 
 
 def _ell(rx, ry, rz, x=0.0, y=0.0, z=None, euler=None):
@@ -425,7 +436,7 @@ def create_game_controller(w: float = 0.11, d: float = 0.06, h: float = 0.03) ->
 
 @archetype("usb_stick")
 def create_usb_stick(l: float = 0.05, w: float = 0.018, h: float = 0.008) -> CompositeObject:
-    body = _box(w, l, h, z=h / 2)
+    body = _rbox([w, l, h], 0.002, z=h / 2)                      # rounded plastic shell
     conn = _box(w * 0.7, 0.018, h * 0.6, y=l / 2 + 0.007, z=h / 2)
     return _co("usb_stick", body, conn)
 
@@ -447,12 +458,12 @@ def create_microphone(r: float = 0.02, h: float = 0.10, head_r: float = 0.025) -
 
 @archetype("tablet")
 def create_tablet(w: float = 0.12, d: float = 0.09, t: float = 0.008) -> CompositeObject:
-    return _co("tablet", _box(w, d, t, z=t / 2))
+    return _co("tablet", _rbox([w, d, t], 0.005, z=t / 2))       # rounded-corner slab
 
 
 @archetype("smartwatch")
 def create_smartwatch(face_r: float = 0.022, band_w: float = 0.022) -> CompositeObject:
-    face = _box(face_r * 2, face_r * 2, 0.012, z=0.006)
+    face = _rbox([face_r * 2, face_r * 2, 0.012], 0.005, z=0.006)
     b1 = _box(band_w, 0.04, 0.004, y=face_r + 0.018, z=0.004)
     b2 = _box(band_w, 0.04, 0.004, y=-face_r - 0.018, z=0.004)
     return _co("smartwatch", face, b1, b2)
@@ -670,12 +681,10 @@ def create_cross_joint(r: float = 0.012, arm: float = 0.05) -> CompositeObject:
 
 @archetype("gear_like")
 def create_gear_like(r: float = 0.035, h: float = 0.015, n_teeth: int = 8) -> CompositeObject:
-    body = _cyl(r, h)
-    teeth = []
-    for k in range(int(n_teeth)):
-        a = 2 * np.pi * k / int(n_teeth)
-        teeth.append(_box(0.01, 0.01, h, x=r * np.cos(a), y=r * np.sin(a), z=h / 2))
-    return _co("gear_like", body, *teeth)
+    # Real gear teeth (alternating-radius prism) instead of glued-on boxes.
+    gear = _gear(n_teeth, r, r * 0.78, h)
+    hub = _cyl(r * 0.3, h)                                       # central hub
+    return _co("gear_like", gear, hub)
 
 
 @archetype("bracket_angle")
@@ -779,6 +788,25 @@ def create_funnel_v2(top_r: float = 0.04, cone_h: float = 0.05,
     tube = _cyl(tube_r, tube_h)
     cone = _frustum(tube_r, top_r, cone_h, z=tube_h - 0.004 + 0.02)  # flared open mouth
     return _co("funnel_v2", tube, cone)
+
+
+@archetype("soap_bar")
+def create_soap_bar(w: float = 0.09, d: float = 0.055, t: float = 0.025) -> CompositeObject:
+    return _co("soap_bar", _rbox([w, d, t], 0.012, z=t / 2))         # heavily filleted
+
+
+@archetype("key_fob")
+def create_key_fob(w: float = 0.03, l: float = 0.055, t: float = 0.009) -> CompositeObject:
+    body = _rbox([w, l, t], 0.004, z=t / 2)
+    ring = _tor(0.011, 0.003, y=l / 2 - 0.004, z=t / 2, euler=[np.pi / 2, 0, 0])
+    return _co("key_fob", body, ring)
+
+
+@archetype("star_knob")
+def create_star_knob(r: float = 0.03, h: float = 0.018, points: int = 6) -> CompositeObject:
+    star = _gear(points, r, r * 0.55, h)                            # deep lobes = a knob
+    shaft = _cyl(0.006, 0.03, z=h + 0.012)
+    return _co("star_knob", star, shaft)
 
 
 # ---------------------------------------------------------------------------

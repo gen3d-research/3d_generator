@@ -9,7 +9,7 @@ primitives), and design sketches for proposed new primitives.
 
 ## Primitive library (`primitives.png`)
 
-The 16 primitive types, each shown with 2–3 variants illustrating its degrees of
+The 18 primitive types, each shown with 2–3 variants illustrating its degrees of
 freedom (sphere = 1 DOF, box = 3 DOF).
 
 ![primitives](primitives.png)
@@ -25,8 +25,8 @@ limits generation quality.
 
 ## Archetype library (`archetypes.png`)
 
-All 93 hand-written archetypes in `ARCHETYPE_REGISTRY` (`src/archetypes.py`),
-built from the 16 primitive types (box, cylinder, sphere, capsule, cone, pyramid,
+All 96 hand-written archetypes in `ARCHETYPE_REGISTRY` (`src/archetypes.py`),
+built from the 18 primitive types (box, cylinder, sphere, capsule, cone, pyramid,
 torus, ellipsoid, wedge). Each is a single connected body.
 
 ![archetypes](archetypes.png)

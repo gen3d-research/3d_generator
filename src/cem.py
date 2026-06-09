@@ -24,7 +24,8 @@ from pathlib import Path
 from primitives import (
     CompositeObject, Primitive, Box, Cylinder, Sphere, Capsule,
     Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle, Frustum, Hemisphere,
-    HexPrism, OpenTube, NGonPrism, Transform, PrimitiveType, seat_height, half_extents,
+    HexPrism, OpenTube, NGonPrism, RoundedBox, GearPrism,
+    Transform, PrimitiveType, seat_height, half_extents,
 )
 from scoring import ObjectScorer, ScoreBreakdown, ScoringConfig
 
@@ -148,6 +149,17 @@ PRIMITIVE_SPECS: List[PrimitiveSpec] = [
                   np.array([3.0, 0.008, 0.01]), np.array([8.0, 0.05, 0.08]),
                   build=lambda p, t: NGonPrism(n_sides=p[0], radius=p[1], height=p[2], transform=t),
                   extract=lambda pr: np.array([float(pr.n_sides), pr.radius, pr.height])),
+    PrimitiveSpec(PrimitiveType.ROUNDED_BOX, ['dx', 'dy', 'dz', 'fillet'],
+                  _log(0.06, 0.04, 0.03, 0.008), np.array([0.35, 0.35, 0.35, 0.25]),
+                  np.array([0.02, 0.02, 0.015, 0.003]), np.array([0.12, 0.12, 0.1, 0.015]),
+                  build=lambda p, t: RoundedBox(dimensions=p[:3], fillet=p[3], transform=t),
+                  extract=lambda pr: np.array([*np.asarray(pr.dimensions, float), pr.fillet])),
+    PrimitiveSpec(PrimitiveType.GEAR_PRISM, ['n_teeth', 'r_outer', 'r_inner', 'height'],
+                  _log(8.0, 0.03, 0.022, 0.015), np.array([0.25, 0.3, 0.3, 0.3]),
+                  np.array([5.0, 0.015, 0.01, 0.006]), np.array([12.0, 0.05, 0.04, 0.04]),
+                  build=lambda p, t: GearPrism(n_teeth=p[0], r_outer=p[1], r_inner=p[2],
+                                               height=p[3], transform=t),
+                  extract=lambda pr: np.array([float(pr.n_teeth), pr.r_outer, pr.r_inner, pr.height])),
 ]
 
 # Default type bias: favor box/cylinder slightly, rest uniform.

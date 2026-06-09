@@ -30,7 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from primitives import (Box, Cylinder, Sphere, Capsule, Cone, Pyramid,  # noqa: E402
                         Torus, Ellipsoid, Wedge, HollowShell, Handle,
-                        Frustum, Hemisphere, HexPrism, OpenTube, NGonPrism)
+                        Frustum, Hemisphere, HexPrism, OpenTube, NGonPrism,
+                        RoundedBox, GearPrism)
 from cem import PRIMITIVE_SPECS                                          # noqa: E402
 from _render_common import grid                                         # noqa: E402
 
@@ -119,6 +120,16 @@ GALLERY = [
         ("triangle n3", NGonPrism(n_sides=3, radius=0.022, height=0.03)),
         ("pentagon n5", NGonPrism(n_sides=5, radius=0.022, height=0.03)),
         ("octagon n8", NGonPrism(n_sides=8, radius=0.022, height=0.03)),
+    ]),
+    ("RoundedBox  (4 DOF: dx, dy, dz, fillet)", [
+        ("phone 60x40x12 r4", RoundedBox(dimensions=np.array([0.06, 0.04, 0.012]), fillet=0.004)),
+        ("bar 90x55x25 r12", RoundedBox(dimensions=np.array([0.09, 0.055, 0.025]), fillet=0.012)),
+        ("cube 50 r15", RoundedBox(dimensions=np.array([0.05, 0.05, 0.05]), fillet=0.015)),
+    ]),
+    ("GearPrism  (4 DOF: n_teeth, r_outer, r_inner, height)", [
+        ("gear n8", GearPrism(n_teeth=8, r_outer=0.03, r_inner=0.022, height=0.015)),
+        ("cog n12", GearPrism(n_teeth=12, r_outer=0.035, r_inner=0.026, height=0.012)),
+        ("star n6", GearPrism(n_teeth=6, r_outer=0.03, r_inner=0.016, height=0.018)),
     ]),
 ]
 

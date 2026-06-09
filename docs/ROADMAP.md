@@ -1,11 +1,12 @@
 # Roadmap — what to add next
 
 > **Update (v2.6):** the top two primitives (**open tube**, **n-gon prism**) and a
-> first batch of **Group-G archetypes** (bucket, flower_pot, vase, wine_bottle,
-> goblet, lamp, salt_shaker, pencil_cup, mortar, pipe, napkin_ring, octagon_nut,
-> funnel_v2) are now **built** — 16 primitives, 93 archetypes. The remaining
-> primitives (rounded box, gear/star, extrusion, helix) and archetypes below are
-> still open.
+> first batch of **Group-G archetypes** are now built. **Update (v2.7):** the
+> next two primitives (**rounded box**, **gear/star prism**) are built too, with
+> `gear_like` rewired to real teeth and tablet/usb_stick/smartwatch to rounded
+> bodies, plus soap_bar/key_fob/star_knob — **18 primitives, 96 archetypes**. The
+> remaining primitives (dish/plate, extrusion, helix, saddle) and archetypes below
+> are still open.
 
 The fidelity audit ([`PRIMITIVES.md`](PRIMITIVES.md)) took the primitive set from 9 → 14
 (hollow_shell, handle, frustum, hemisphere, hex_prism) and added a graspability gate + a
@@ -64,8 +65,8 @@ Ordered roughly by value × effort. "Unlocks" lists archetypes/features it would
 |---|---|---|---|---|
 | **open tube / pipe** ✅ | outer_r, wall, height | CSG: cylinder − cylinder (both ends open) | low | pipe, straw, napkin ring (built v2.6) |
 | **n-gon prism** ✅ | n_sides, radius, height | `cylinder(sections=n)`, n∈3..8 | low | octagon nut, faceted bodies (built v2.6) |
-| **rounded / fillet box** | dims, fillet_r | CSG (box ∪ edge cylinders ∪ corner spheres) or minkowski | medium | phone, tablet, controller, soap bar, key fob — much more realistic |
-| **gear / star prism** | n_teeth, r_outer, r_inner, height | manual alternating-radius mesh | medium | real gears/sprockets (the current `gear_like` fakes teeth with boxes), star knobs |
+| **rounded / fillet box** ✅ | dims, fillet | convex hull of 8 corner spheres (= box⊕ball) | medium | tablet, usb, smartwatch, soap_bar, key_fob (built v2.7) |
+| **gear / star prism** ✅ | n_teeth, r_outer, r_inner, height | manual alternating-radius star prism | medium | gear_like (real teeth), star_knob (built v2.7) |
 | **dish / plate** | radius, depth, wall | flattened `hollow_shell` / shallow SoR cap | low | plate, saucer, shallow bowl, lid (or just clamp `hollow_shell` thin) |
 | **arbitrary-polygon extrusion** | profile (L/U/T), height | needs a small triangulator (no shapely) | high | brackets, channels, extrusions, I-beams |
 | **helix / spring** | coil_r, wire_r, pitch, turns | sweep a circle along a helix polyline (manual) | high | spring, coil, threaded look |

@@ -35,6 +35,9 @@ class PrimitiveType(Enum):
     # v2.6 additions (roadmap) — pipe + general faceted prism.
     OPEN_TUBE = "open_tube"
     NGON_PRISM = "ngon_prism"
+    # v2.7 additions (roadmap) — rounded box + gear/star.
+    ROUNDED_BOX = "rounded_box"
+    GEAR_PRISM = "gear_prism"
 
 
 @dataclass
@@ -661,6 +664,88 @@ class NGonPrism(Primitive):
     def volume(self) -> float:
         n = self._n()
         return float(0.5 * n * self.radius ** 2 * np.sin(2.0 * np.pi / n) * self.height)
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+@dataclass
+class RoundedBox(Primitive):
+    """Box with all 12 edges/8 corners filleted — phone/tablet/controller/soap-bar
+    bodies (vs a hard Box). Built as the convex hull of 8 corner spheres (= the
+    Minkowski sum box-inner ⊕ ball), so faces stay flat and edges/corners round.
+    Centered on its centroid."""
+    dimensions: np.ndarray = field(default_factory=lambda: np.array([0.06, 0.04, 0.03]))
+    fillet: float = 0.008
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.ROUNDED_BOX)
+
+    def _dims(self):
+        d = np.asarray(self.dimensions, float)
+        r = float(np.clip(self.fillet, 0.001, float(np.min(d)) / 2.0 - 0.001))
+        return d, r, np.maximum(d - 2.0 * r, 1e-3)         # outer dims, fillet, inner box
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        d, r, inner = self._dims()
+        spheres = []
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                for sz in (-1, 1):
+                    s = trimesh.creation.icosphere(radius=r, subdivisions=2)
+                    s.apply_translation([sx * inner[0] / 2, sy * inner[1] / 2, sz * inner[2] / 2])
+                    spheres.append(s)
+        hull = trimesh.util.concatenate(spheres).convex_hull
+        return _recenter_and_place(hull, self.transform)
+
+    def volume(self) -> float:
+        d, r, inner = self._dims()
+        l, w, h = inner
+        return float(l * w * h + 2 * r * (l * w + l * h + w * h)
+                     + np.pi * r * r * (l + w + h) + 4.0 / 3.0 * np.pi * r ** 3)
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+@dataclass
+class GearPrism(Primitive):
+    """Gear / cog / star — a prism whose cross-section alternates between an outer
+    (tooth tip) and inner (root) radius. Real teeth instead of the box-faked
+    ``gear_like``. +Z axis, centered on its centroid. ``n_teeth`` sampled then
+    rounded (5..12)."""
+    n_teeth: float = 8.0
+    r_outer: float = 0.03
+    r_inner: float = 0.022
+    height: float = 0.015
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.GEAR_PRISM)
+
+    def _nt(self):
+        return int(np.clip(round(self.n_teeth), 5, 12))
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        nt = self._nt()
+        ro, ri, h = float(self.r_outer), float(self.r_inner), float(max(self.height, 2e-3))
+        m = 2 * nt
+        ang = np.linspace(0.0, 2.0 * np.pi, m, endpoint=False)
+        rad = np.where(np.arange(m) % 2 == 0, ro, ri)
+        bot = np.c_[rad * np.cos(ang), rad * np.sin(ang), np.zeros(m)]
+        top = np.c_[rad * np.cos(ang), rad * np.sin(ang), np.full(m, h)]
+        verts = np.vstack([bot, top, [[0.0, 0.0, 0.0]], [[0.0, 0.0, h]]])
+        cb, ct = 2 * m, 2 * m + 1
+        faces = []
+        for i in range(m):
+            j = (i + 1) % m
+            faces += [[i, j, m + j], [i, m + j, m + i]]    # side wall
+            faces += [[cb, j, i]]                          # bottom cap (normal -z)
+            faces += [[ct, m + i, m + j]]                  # top cap (normal +z)
+        return _finish_mesh(np.asarray(verts, float), np.asarray(faces, int), self.transform)
+
+    def volume(self) -> float:
+        nt = self._nt()
+        return float(nt * self.r_outer * self.r_inner * np.sin(np.pi / nt) * self.height)
 
     def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
         return self._mesh_inertia(density)

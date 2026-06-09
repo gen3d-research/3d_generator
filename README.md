@@ -100,7 +100,7 @@ Two knobs control how many objects flow through the pipeline:
 ## How It Works
 
 ### 1. Parametric Object Representation
-Objects are compositions of **16 primitive types** (the 9 base shapes plus v2.2 hollow-shell + handle, v2.3 frustum + hemisphere, v2.5 hex-prism, and v2.6 open-tube + n-gon prism) with rigid transforms. This keeps generation fast and interpretable. See the [**Shape Library & Limitations**](#shape-library--limitations) section below for the full gallery, parameters, and a fidelity audit.
+Objects are compositions of **18 primitive types** (the 9 base shapes plus v2.2 hollow-shell + handle, v2.3 frustum + hemisphere, v2.5 hex-prism, v2.6 open-tube + n-gon prism, and v2.7 rounded-box + gear/star prism) with rigid transforms. This keeps generation fast and interpretable. See the [**Shape Library & Limitations**](#shape-library--limitations) section below for the full gallery, parameters, and a fidelity audit.
 
 ### 2. Constraint-Based Scoring
 Each object is scored on manipulation-relevant criteria:
@@ -133,7 +133,7 @@ Generated objects are exported with:
 
 ## Shape Library & Limitations
 
-The generator assembles objects from **16 primitive types**. Each row below varies
+The generator assembles objects from **18 primitive types**. Each row below varies
 one type to show its **degrees of freedom** (DOF) — how many independent shape
 parameters it has (sphere = 1, box = 3):
 
