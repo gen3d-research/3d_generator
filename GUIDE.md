@@ -225,8 +225,10 @@ ros2_ws/install/generated_objects_eval/bin/gazebo_stability_eval \
 - *(other flags)* `--config PATH` — override `eval_config.yaml` (spawn pose, settle time,
   drift/tilt tolerances).
 
-It prints a per-method summary (`spawn_ok`, `stable`, `rate=%`). Kill stale sims between runs:
-`pkill -KILL -f "gz sim"` (two same-world servers fight over the spawn service).
+It prints a per-method summary (`spawn_ok`, `stable`, `rate=%`). Kill stale sims between runs
+with a **precise** pattern — `pkill -KILL -f "gz sim -s -r"` (two same-world servers fight over
+the spawn service). Avoid the broad `pkill -f "gz sim"`: it matches any process whose command
+line merely contains "gz sim", which can SIGKILL an unrelated shell or a live world.
 
 ---
 
@@ -299,6 +301,46 @@ python scripts/patch_sdf_collision.py --manifest output/arch_demo/manifest.json
 Then run **exactly the §5 drop test** and **§6 pick-and-place** with
 `--manifest .../arch_demo/manifest.json`. The drop-test / MoveIt summaries print one row per
 archetype; `visual_demo.launch.py method:=mug_like` cycles just that archetype's variants.
+
+### Full run — all 105 archetypes × 100 variants, then drop-test in one session
+
+Copy-paste (use the venv's python; `env -u PYTHONPATH` keeps a sourced ROS 2 off `PYTHONPATH`):
+
+```bash
+# 1. Generate 10,500 variants (all 105 archetypes × 100) -> URDF/SDF + grasps. ~hours of CPU.
+env -u PYTHONPATH ~/venv/3d_cem/bin/python scripts/build_archetype_manifest.py \
+    --variants 100 --out output/arch_variants/manifest.json \
+    --export-root output/arch_variants/objects
+
+# 2. Stiffen contact + raise friction on every SDF so objects rest flush.
+env -u PYTHONPATH ~/venv/3d_cem/bin/python scripts/patch_sdf_collision.py \
+    --manifest output/arch_variants/manifest.json
+
+# 3. Drop-test all of them in ONE gz session (no restart needed).
+source ros2_ws/install/setup.bash
+ros2 launch generated_objects_eval stability_world.launch.py &      # headless world, one session
+ros2_ws/install/generated_objects_eval/bin/gazebo_stability_eval \
+    --manifest $(pwd)/output/arch_variants/manifest.json \
+    --out $(pwd)/output/arch_variants/gazebo_stability.json --max-objects 0
+```
+
+- Step 3 is sequential (~3–5 s/object → 10,500 objects ≈ 10+ h). Trim with `--max-objects N`
+  for a sample, or `--variants`/`--archetypes` in step 1 for a smaller set.
+- **`& ` on the launch** backgrounds the world so the next line (the evaluator) runs in the
+  same shell; the evaluator spawns objects into that running world via `gz service`.
+
+**Watch the drops in a Gazebo window** — swap the launch for the GUI world:
+
+```bash
+ros2 launch generated_objects_eval stability_world_gui.launch.py &   # opens the gz window
+ros2_ws/install/generated_objects_eval/bin/gazebo_stability_eval \
+    --manifest $(pwd)/output/arch_variants/manifest.json \
+    --out $(pwd)/output/arch_variants/gazebo_stability.json --max-objects 30
+```
+
+(Use a small `--max-objects` with the GUI so you can actually watch each object fall and
+settle.) When done, stop the world: `kill %1` (or `pkill -f "gz sim -s -r"` — a *precise*
+pattern; never `pkill -f "gz sim"`, which can match unrelated shells).
 
 > **One gz session handles the whole manifest** — the evaluator spawns → settles → *despawns*
 > each object in turn, so models don't accumulate (verified: 45 variants spawned + settled
