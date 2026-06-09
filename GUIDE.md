@@ -300,18 +300,18 @@ Then run **exactly the §5 drop test** and **§6 pick-and-place** with
 `--manifest .../arch_demo/manifest.json`. The drop-test / MoveIt summaries print one row per
 archetype; `visual_demo.launch.py method:=mug_like` cycles just that archetype's variants.
 
-> **Scale.** Generation is cheap, but per-object export + grasp synthesis is ~0.5–2 s and the
-> ROS 2 sim is sequential (~3–5 s/object). 105 archetypes × 100 = 10,500 objects is hours of
-> CPU and 10+ hours of sim. For the sim, scope it down (fewer `--variants` or a subset of
-> `--archetypes`); the pure-CPU grasp/diversity eval can run on the full set.
+> **One gz session handles the whole manifest** — the evaluator spawns → settles → *despawns*
+> each object in turn, so models don't accumulate (verified: 45 variants spawned + settled
+> 45/45 in a single session). You do **not** need to restart Gazebo between objects.
+> (If you ever see everything after the first ~20 objects report `spawn_ok=False`, it's an
+> external kill of the gz process — most often an over-broad `pkill -f "gz sim"` matching the
+> wrong process. Kill precisely, e.g. `pkill -f "gz sim -s -r"`, or just the launch PID.)
 >
-> **gz server stability.** The Gazebo server tends to **die after ~20 sequential spawns**
-> (`process has died … exit code -9`), so a single long drop-test run silently reports
-> `spawn_ok=False` for everything after that point — *not* a problem with those objects (run
-> them in isolation and they spawn + settle fine). For batches bigger than ~15–20, **restart
-> the world between chunks**: loop `--max-objects 15` over slices of the manifest, killing
-> `gz sim` and relaunching `stability_world.launch.py` each chunk (this is what
-> `scripts/run_multi_seed.sh` does per seed).
+> **The only real constraint is wall-clock.** Generation is cheap, but per-object export +
+> grasp synthesis is ~0.5–2 s and the sim is sequential (~3–5 s/object). 105 archetypes ×
+> 100 = 10,500 objects is a few hours of CPU and ~10+ hours of sim **in one run** — fine to
+> leave running, but scope it down (fewer `--variants` or a subset of `--archetypes`) if you
+> want a quick pass. The pure-CPU grasp/diversity eval can always run on the full set.
 
 ---
 
