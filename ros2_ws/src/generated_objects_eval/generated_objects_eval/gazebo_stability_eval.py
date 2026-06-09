@@ -148,7 +148,12 @@ def evaluate_one(entry: dict, cfg: dict) -> dict:
     if pose is None:
         return {"name": name, "method": entry["method"],
                 "spawn_ok": True, "stable": False, "reason": "no_pose"}
-    drift = abs(pose["position"][2] - spawn_z)
+    # Drift = deviation from the EXPECTED resting height (the table top), not from
+    # the elevated spawn point. Objects are base-seated (model origin at z=0), so a
+    # cleanly-settled object rests with its origin at the table top (spawn["z"]).
+    # Measuring from spawn_z would count the intentional settle-drop as "drift" and
+    # trip the tolerance for perfectly-stable, upright objects.
+    drift = abs(pose["position"][2] - spawn["z"])
     tilt = tilt_angle_deg(np.asarray(pose["orientation"]))
     stable = (drift < stab["drift_tolerance_m"]) and \
              (tilt < stab["upright_tolerance_deg"])

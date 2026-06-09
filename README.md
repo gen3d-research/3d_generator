@@ -65,6 +65,20 @@ python main.py demo
 python main.py archetypes -o output/archetypes
 ```
 
+### Visualize the shape library
+
+All renderers are headless and write PNGs under `docs/gallery/`:
+
+```bash
+python scripts/render_primitives.py            # the 19 primitive types + their DOF
+python scripts/render_gallery.py               # all 105 archetypes + a trained-CEM sample sheet
+python scripts/gen_strategies.py --strategy all  # constrained generation sweeps (single-type, pairs, symmetric, …)
+python scripts/render_archetype_varieties.py --subset --combined  # CEM-trained varieties per archetype
+```
+
+➡️ **[`GUIDE.md`](GUIDE.md) is the one-stop walkthrough** — generate/train → visualize →
+**drop test** and **pick-and-place** in ROS 2 / Gazebo on the generated parts.
+
 ### Reproducing Paper Results
 
 `REPRODUCE.md` walks through every cell of Table I end-to-end (≈ 30 minutes on a
