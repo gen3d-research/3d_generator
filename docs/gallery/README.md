@@ -38,3 +38,11 @@ the primitive count per object — note the multi-part composites mixing several
 primitive types, in contrast to v1's single-primitive output.
 
 ![v2 samples](v2_samples.png)
+
+## Archetype variant library (`variants/`)
+
+`variants/<name>.png` — for each of the 105 archetypes, a grid of parametric variants
+(the same per-archetype distribution `build_archetype_manifest.py` samples to produce
+~100 manipulation-ready variants each). `variants_index_*.png` are paginated contact
+sheets: one representative of every archetype. Regenerate with
+`python scripts/render_variant_gallery.py`.

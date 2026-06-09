@@ -385,20 +385,50 @@
           </div>
         </div>
       </div>
-      <h3 class="title is-5 has-text-centered" style="margin-top:1rem;">Archetype varieties</h3>
-      <p class="has-text-centered" style="max-width:780px;margin:0 auto 1rem;">
-        Each hand-written archetype is a parametric template; a per-archetype CEM tunes its
-        parameters to produce many tuned variations.</p>
+      <h3 class="title is-5 has-text-centered" style="margin-top:1rem;">Archetype variant library</h3>
+      <p class="has-text-centered" style="max-width:820px;margin:0 auto 1rem;">
+        Each hand-written archetype is a parametric template, so the generator can emit
+        <strong>~100 distinct variants of every one of the 105 archetypes</strong> (~10,500
+        manipulation-ready parts) &mdash; each exported to URDF/SDF with grasp candidates for
+        the ROS 2 drop / pick-and-place tests. Below: one representative of every archetype,
+        and the per-parameter spread for a single archetype.</p>
+      <div class="columns is-centered is-multiline">
+        <div class="column is-half">
+          <div class="figure-container">
+            <img src="./static/images/variants_index_01.png" alt="Archetype variant library 1">
+          </div>
+        </div>
+        <div class="column is-half">
+          <div class="figure-container">
+            <img src="./static/images/variants_index_02.png" alt="Archetype variant library 2">
+          </div>
+        </div>
+        <div class="column is-half">
+          <div class="figure-container">
+            <img src="./static/images/variants_index_03.png" alt="Archetype variant library 3">
+          </div>
+        </div>
+        <div class="column is-half">
+          <div class="figure-container">
+            <img src="./static/images/variants_index_04.png" alt="Archetype variant library 4">
+            <p class="figure-caption">The 105 archetypes (one variant each). Per-archetype
+              variant grids live in <code>docs/gallery/variants/</code>.</p>
+          </div>
+        </div>
+      </div>
       <div class="columns is-centered">
         <div class="column is-three-quarters">
           <div class="figure-container">
             <img src="./static/images/varieties_combined.png" alt="Archetype varieties">
-            <p class="figure-caption">CEM-trained varieties &mdash; each row is one archetype.</p>
+            <p class="figure-caption">CEM-trained varieties &mdash; each row is one archetype,
+              its parameters tuned by a per-archetype CEM.</p>
           </div>
         </div>
       </div>
       <p class="has-text-centered" style="margin-top:1rem;">
-        What's next &mdash; new archetypes and primitives on the backlog &mdash; is in
+        Generate variants and test them in ROS 2 with
+        <a href="https://github.com/gen3d-research/3d_generator/blob/main/GUIDE.md"><code>GUIDE.md</code></a>;
+        what's next is in
         <a href="https://github.com/gen3d-research/3d_generator/blob/main/docs/ROADMAP.md"><code>docs/ROADMAP.md</code></a>.</p>
     </div>
   </section>
