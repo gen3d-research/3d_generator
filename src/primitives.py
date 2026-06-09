@@ -38,6 +38,8 @@ class PrimitiveType(Enum):
     # v2.7 additions (roadmap) — rounded box + gear/star.
     ROUNDED_BOX = "rounded_box"
     GEAR_PRISM = "gear_prism"
+    # v2.8 addition (roadmap) — structural L/U/T/I/+ extrusion.
+    EXTRUDED_PROFILE = "extruded_profile"
 
 
 @dataclass
@@ -746,6 +748,64 @@ class GearPrism(Primitive):
     def volume(self) -> float:
         nt = self._nt()
         return float(nt * self.r_outer * self.r_inner * np.sin(np.pi / nt) * self.height)
+
+    def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
+        return self._mesh_inertia(density)
+
+
+@dataclass
+class ExtrudedProfile(Primitive):
+    """A structural cross-section (L / U-channel / T / I-beam / plus) extruded along
+    +Z — angle iron, channel, beam, bracket. The profiles are rectilinear, so each
+    is a CSG union of axis-aligned boxes (no triangulator needed). ``profile_kind``
+    1..5 → L,U,T,I,plus (sampled then rounded). Centered on its centroid."""
+    profile_kind: float = 3.0
+    width: float = 0.05
+    height: float = 0.05
+    thickness: float = 0.012
+    length: float = 0.05
+
+    _KINDS = ('L', 'U', 'T', 'I', 'plus')
+
+    def __post_init__(self):
+        object.__setattr__(self, 'ptype', PrimitiveType.EXTRUDED_PROFILE)
+
+    def _dims(self):
+        W, H = float(self.width), float(self.height)
+        t = float(np.clip(self.thickness, 0.002, min(W, H) / 2.0 - 0.001))
+        L = float(max(self.length, 2e-3))
+        k = int(np.clip(round(self.profile_kind), 1, 5)) - 1
+        return k, W, H, t, L
+
+    def _boxes(self):
+        k, W, H, t, L = self._dims()
+        if k == 0:        # L
+            return [((W, t, L), (0, -H / 2 + t / 2, 0)), ((t, H, L), (-W / 2 + t / 2, 0, 0))]
+        if k == 1:        # U / channel
+            return [((W, t, L), (0, -H / 2 + t / 2, 0)),
+                    ((t, H, L), (-W / 2 + t / 2, 0, 0)), ((t, H, L), (W / 2 - t / 2, 0, 0))]
+        if k == 2:        # T
+            return [((W, t, L), (0, H / 2 - t / 2, 0)), ((t, H, L), (0, 0, 0))]
+        if k == 3:        # I-beam
+            return [((W, t, L), (0, H / 2 - t / 2, 0)), ((W, t, L), (0, -H / 2 + t / 2, 0)),
+                    ((t, H, L), (0, 0, 0))]
+        return [((W, t, L), (0, 0, 0)), ((t, H, L), (0, 0, 0))]   # plus
+
+    def to_mesh(self) -> trimesh.Trimesh:
+        meshes = [trimesh.creation.box(extents=np.asarray(s, float),
+                                       transform=Transform(translation=np.asarray(c, float)).as_matrix())
+                  for s, c in self._boxes()]
+        try:
+            solid = trimesh.boolean.union(meshes) if len(meshes) > 1 else meshes[0]
+        except Exception:
+            solid = trimesh.util.concatenate(meshes)
+        return _recenter_and_place(solid, self.transform)
+
+    def volume(self) -> float:
+        k, W, H, t, L = self._dims()
+        area = {0: t * (W + H - t), 1: t * (W + 2 * H - 2 * t), 2: t * (W + H - t),
+                3: t * (2 * W + H - 2 * t), 4: t * (W + H - t)}[k]
+        return float(area * L)
 
     def inertia_tensor(self, density: float = 1000.0) -> np.ndarray:
         return self._mesh_inertia(density)

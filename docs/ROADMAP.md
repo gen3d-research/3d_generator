@@ -70,7 +70,7 @@ Ordered roughly by value × effort. "Unlocks" lists archetypes/features it would
 | **rounded / fillet box** ✅ | dims, fillet | convex hull of 8 corner spheres (= box⊕ball) | medium | tablet, usb, smartwatch, soap_bar, key_fob (built v2.7) |
 | **gear / star prism** ✅ | n_teeth, r_outer, r_inner, height | manual alternating-radius star prism | medium | gear_like (real teeth), star_knob (built v2.7) |
 | **dish / plate** | radius, depth, wall | flattened `hollow_shell` / shallow SoR cap | low | plate, saucer, shallow bowl, lid (or just clamp `hollow_shell` thin) |
-| **arbitrary-polygon extrusion** | profile (L/U/T), height | needs a small triangulator (no shapely) | high | brackets, channels, extrusions, I-beams |
+| **L/U/T/I extrusion** ✅ | kind, w, h, t, length | CSG union of axis-aligned boxes | medium | angle_iron, u_channel, t_beam, i_beam (built v2.8) |
 | **helix / spring** | coil_r, wire_r, pitch, turns | sweep a circle along a helix polyline (manual) | high | spring, coil, threaded look |
 | **saddle (hyperbolic patch)** | width, depth, curvature | parametric grid mesh | high (niche) | ergonomic grips, seats |
 

@@ -100,7 +100,7 @@ Two knobs control how many objects flow through the pipeline:
 ## How It Works
 
 ### 1. Parametric Object Representation
-Objects are compositions of **18 primitive types** (the 9 base shapes plus v2.2 hollow-shell + handle, v2.3 frustum + hemisphere, v2.5 hex-prism, v2.6 open-tube + n-gon prism, and v2.7 rounded-box + gear/star prism) with rigid transforms. This keeps generation fast and interpretable. See the [**Shape Library & Limitations**](#shape-library--limitations) section below for the full gallery, parameters, and a fidelity audit.
+Objects are compositions of **19 primitive types** (the 9 base shapes plus the audit/roadmap additions through v2.8 L/U/T/I extrusion) with rigid transforms. This keeps generation fast and interpretable. See the [**Shape Library & Limitations**](#shape-library--limitations) section below for the full gallery, parameters, and a fidelity audit.
 
 ### 2. Constraint-Based Scoring
 Each object is scored on manipulation-relevant criteria:
@@ -133,7 +133,7 @@ Generated objects are exported with:
 
 ## Shape Library & Limitations
 
-The generator assembles objects from **18 primitive types**. Each row below varies
+The generator assembles objects from **19 primitive types**. Each row below varies
 one type to show its **degrees of freedom** (DOF) — how many independent shape
 parameters it has (sphere = 1, box = 3):
 
@@ -157,6 +157,9 @@ parameters it has (sphere = 1, box = 3):
 | **hex_prism** ✨ | 2 | radius, height | hex nut / bolt head |
 | **open_tube** ✨ | 3 | outer, wall, height | pipe / ring (open both ends) |
 | **ngon_prism** ✨ | 3 | n_sides, radius, height | triangular…octagonal prism |
+| **rounded_box** ✨ | 4 | dx, dy, dz, fillet | filleted phone / tablet / soap bar |
+| **gear_prism** ✨ | 4 | n_teeth, r_outer, r_inner, height | gear / cog / star knob |
+| **extruded_profile** ✨ | 5 | kind, w, h, t, length | L / U / T / I structural member |
 
 ### Faked shapes → missing primitives
 

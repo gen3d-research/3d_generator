@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from primitives import (Box, Cylinder, Sphere, Capsule, Cone, Pyramid,  # noqa: E402
                         Torus, Ellipsoid, Wedge, HollowShell, Handle,
                         Frustum, Hemisphere, HexPrism, OpenTube, NGonPrism,
-                        RoundedBox, GearPrism)
+                        RoundedBox, GearPrism, ExtrudedProfile)
 from cem import PRIMITIVE_SPECS                                          # noqa: E402
 from _render_common import grid                                         # noqa: E402
 
@@ -130,6 +130,11 @@ GALLERY = [
         ("gear n8", GearPrism(n_teeth=8, r_outer=0.03, r_inner=0.022, height=0.015)),
         ("cog n12", GearPrism(n_teeth=12, r_outer=0.035, r_inner=0.026, height=0.012)),
         ("star n6", GearPrism(n_teeth=6, r_outer=0.03, r_inner=0.016, height=0.018)),
+    ]),
+    ("ExtrudedProfile  (5 DOF: kind, w, h, t, length)", [
+        ("L angle", ExtrudedProfile(profile_kind=1, width=0.045, height=0.045, thickness=0.008, length=0.09)),
+        ("U channel", ExtrudedProfile(profile_kind=2, width=0.05, height=0.045, thickness=0.008, length=0.09)),
+        ("I beam", ExtrudedProfile(profile_kind=4, width=0.05, height=0.06, thickness=0.01, length=0.10)),
     ]),
 ]
 

@@ -24,7 +24,7 @@ from pathlib import Path
 from primitives import (
     CompositeObject, Primitive, Box, Cylinder, Sphere, Capsule,
     Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle, Frustum, Hemisphere,
-    HexPrism, OpenTube, NGonPrism, RoundedBox, GearPrism,
+    HexPrism, OpenTube, NGonPrism, RoundedBox, GearPrism, ExtrudedProfile,
     Transform, PrimitiveType, seat_height, half_extents,
 )
 from scoring import ObjectScorer, ScoreBreakdown, ScoringConfig
@@ -160,6 +160,13 @@ PRIMITIVE_SPECS: List[PrimitiveSpec] = [
                   build=lambda p, t: GearPrism(n_teeth=p[0], r_outer=p[1], r_inner=p[2],
                                                height=p[3], transform=t),
                   extract=lambda pr: np.array([float(pr.n_teeth), pr.r_outer, pr.r_inner, pr.height])),
+    PrimitiveSpec(PrimitiveType.EXTRUDED_PROFILE, ['kind', 'width', 'height', 'thickness', 'length'],
+                  _log(3.0, 0.05, 0.05, 0.012, 0.05), np.array([0.25, 0.3, 0.3, 0.25, 0.3]),
+                  np.array([1.0, 0.02, 0.02, 0.005, 0.02]), np.array([5.0, 0.1, 0.1, 0.02, 0.1]),
+                  build=lambda p, t: ExtrudedProfile(profile_kind=p[0], width=p[1], height=p[2],
+                                                     thickness=p[3], length=p[4], transform=t),
+                  extract=lambda pr: np.array([float(pr.profile_kind), pr.width, pr.height,
+                                               pr.thickness, pr.length])),
 ]
 
 # Default type bias: favor box/cylinder slightly, rest uniform.

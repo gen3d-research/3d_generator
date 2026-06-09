@@ -1,6 +1,6 @@
 # Primitive & Archetype Library — gallery, math, and fidelity audit
 
-This document (a) catalogs the **18 primitive types** the generator builds objects
+This document (a) catalogs the **19 primitive types** the generator builds objects
 from — with a picture, parameters, degrees of freedom (DOF), clamp ranges, math,
 and **limitations**; (b) audits the hand-written **archetypes** to show which
 real-world shapes are currently *faked* because the primitive set is too small;
@@ -53,11 +53,12 @@ clamped to `[min, max]`):
 | ngon_prism ✨ | 3 | n_sides, radius, height | 5, 0.02, 0.03 | 3, 0.008, 0.01 | 8, 0.05, 0.08 |
 | rounded_box ✨ | 4 | dx, dy, dz, fillet | 0.06, 0.04, 0.03, 0.008 | 0.02, 0.02, 0.015, 0.003 | 0.12, 0.12, 0.1, 0.015 |
 | gear_prism ✨ | 4 | n_teeth, r_outer, r_inner, height | 8, 0.03, 0.022, 0.015 | 5, 0.015, 0.01, 0.006 | 12, 0.05, 0.04, 0.04 |
+| extruded_profile ✨ | 5 | kind, width, height, thickness, length | 3, 0.05, 0.05, 0.012, 0.05 | 1, 0.02, 0.02, 0.005, 0.02 | 5, 0.1, 0.1, 0.02, 0.1 |
 
-**Total: 48 sampled shape parameters across 18 types** (✨ = the audit-driven
+**Total: 53 sampled shape parameters across 19 types** (✨ = the audit-driven
 additions: v2.2 hollow_shell + handle, v2.3 frustum + hemisphere, v2.5 hex_prism,
-v2.6 open_tube + ngon_prism, v2.7 rounded_box + gear_prism). Each primitive also
-carries a 6-DOF `Transform` (position + orientation) set during composition.
+v2.6 open_tube + ngon_prism, v2.7 rounded_box + gear_prism, v2.8 extruded_profile).
+Each primitive also carries a 6-DOF `Transform` (position + orientation).
 
 ### Math & construction (per type)
 
@@ -84,6 +85,7 @@ carries a 6-DOF `Transform` (position + orientation) set during composition.
 | **NGonPrism** ✨ | `n/2 · r² sin(2π/n) · h` | `cylinder(sections=n)`, n∈3..8 | `_mesh_inertia` |
 | **RoundedBox** ✨ | `lwh + 2r(lw+lh+wh) + πr²(l+w+h) + 4/3πr³` | **convex hull** of 8 corner spheres (= box⊕ball) | `_mesh_inertia` |
 | **GearPrism** ✨ | `n·r₀·rᵢ·sin(π/n)·h` | manual alternating-radius star prism (fan-capped) | `_mesh_inertia` |
+| **ExtrudedProfile** ✨ | `cross-section-area · length` | CSG union of axis-aligned boxes (L/U/T/I/+) | `_mesh_inertia` |
 
 ### Limitations (what each type **cannot** represent)
 
@@ -102,7 +104,7 @@ This is the crux of the audit — every limitation below forces an archetype to
 
 ## 2. Archetype library & fidelity audit
 
-The 101 hand-written archetypes (`src/archetypes.py` + 20 v1 factories in
+The 105 hand-written archetypes (`src/archetypes.py` + 20 v1 factories in
 `src/primitives.py`) are the "ground-truth" shapes the generator is meant to
 approximate. Multi-part archetypes deliberately **overlap** their parts so the
 union is one connected body.

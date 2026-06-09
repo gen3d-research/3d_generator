@@ -21,7 +21,8 @@ from typing import Callable, Dict
 from primitives import (
     CompositeObject, Box, Cylinder, Sphere, Capsule,
     Cone, Pyramid, Torus, Ellipsoid, Wedge, HollowShell, Handle, Frustum, Hemisphere,
-    HexPrism, OpenTube, NGonPrism, RoundedBox, GearPrism, seat_height, Transform,
+    HexPrism, OpenTube, NGonPrism, RoundedBox, GearPrism, ExtrudedProfile,
+    seat_height, Transform,
     # existing v1 factories (registered below)
     create_small_box, create_tall_box, create_flat_box, create_mug_like,
     create_l_shape, create_dumbbell, create_hammer, create_bottle,
@@ -159,6 +160,13 @@ def _rbox(dims, fillet, x=0.0, y=0.0, z=None, euler=None):
 def _gear(nt, ro, ri, h, x=0.0, y=0.0, z=None, euler=None):
     z = h / 2 if z is None else z
     return GearPrism(n_teeth=nt, r_outer=ro, r_inner=ri, height=h, transform=_T(x, y, z, euler))
+
+
+def _profile(kind, w, h, t, length, x=0.0, y=0.0, z=None, euler=None):
+    """L/U/T/I/plus extrusion (kind 1..5). Cross-section in XY, extruded along Z."""
+    z = length / 2 if z is None else z
+    return ExtrudedProfile(profile_kind=kind, width=w, height=h, thickness=t,
+                           length=length, transform=_T(x, y, z, euler))
 
 
 def _ell(rx, ry, rz, x=0.0, y=0.0, z=None, euler=None):
@@ -856,6 +864,32 @@ def create_birdhouse(w: float = 0.05, h: float = 0.06) -> CompositeObject:
     roof = _pyr(w * 0.85, 0.032, z=h + 0.003)                      # pitched roof, seated on the body
     perch = _cyl(0.004, 0.025, y=w / 2 + 0.006, z=h * 0.55, euler=[np.pi / 2, 0, 0])
     return _co("birdhouse", body, roof, perch)
+
+
+# Group H — structural extrusions (v2.8) — single ExtrudedProfile members.
+
+@archetype("angle_iron")
+def create_angle_iron(w: float = 0.04, h: float = 0.04, t: float = 0.008,
+                      length: float = 0.10) -> CompositeObject:
+    return _co("angle_iron", _profile(1, w, h, t, length))         # L
+
+
+@archetype("u_channel")
+def create_u_channel(w: float = 0.045, h: float = 0.04, t: float = 0.008,
+                     length: float = 0.10) -> CompositeObject:
+    return _co("u_channel", _profile(2, w, h, t, length))          # U
+
+
+@archetype("t_beam")
+def create_t_beam(w: float = 0.05, h: float = 0.05, t: float = 0.01,
+                  length: float = 0.10) -> CompositeObject:
+    return _co("t_beam", _profile(3, w, h, t, length))             # T
+
+
+@archetype("i_beam")
+def create_i_beam(w: float = 0.05, h: float = 0.06, t: float = 0.01,
+                  length: float = 0.11) -> CompositeObject:
+    return _co("i_beam", _profile(4, w, h, t, length))             # I-beam / girder
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ import primitives as P
 from primitives import (
     Box, Cylinder, Sphere, Capsule, Cone, Pyramid, Torus, Ellipsoid, Wedge,
     HollowShell, Handle, Frustum, Hemisphere, HexPrism, OpenTube, NGonPrism,
-    RoundedBox, GearPrism, Transform, seat_height,
+    RoundedBox, GearPrism, ExtrudedProfile, Transform, seat_height,
 )
 from archetypes import ARCHETYPE_REGISTRY
 from scoring import ObjectScorer, ScoringConfig
@@ -44,6 +44,8 @@ PRIMS = {
     "ngon_prism": NGonPrism(n_sides=5, radius=0.02, height=0.03),
     "rounded_box": RoundedBox(dimensions=np.array([0.06, 0.04, 0.03]), fillet=0.008),
     "gear_prism": GearPrism(n_teeth=8, r_outer=0.03, r_inner=0.022, height=0.015),
+    "extruded_profile": ExtrudedProfile(profile_kind=4, width=0.05, height=0.06,
+                                        thickness=0.01, length=0.05),
 }
 
 
