@@ -275,6 +275,38 @@ See [`DEMO.md`](DEMO.md) for recording the videos, RViz tips, and GPU/`libEGL` g
 
 ---
 
+## 7b. Test ARCHETYPE VARIANTS in ROS 2 (N variants per archetype)
+
+To drop-test / pick-test many parameter **variants of each archetype** (e.g. 100 mugs,
+100 bottles, …), build a variant manifest and feed it to the same §5–§6 evaluators.
+`build_archetype_manifest.py` generates the variants (per-archetype CEM), exports each to
+URDF/SDF, synthesizes grasps, and tags each with `method=<archetype name>` so results group
+per archetype.
+
+```bash
+python scripts/build_archetype_manifest.py --variants 8 \
+    --archetypes mug_like,wine_bottle,nut,i_beam,gear_like,bucket \
+    --out output/arch_demo/manifest.json --export-root output/arch_demo/objects
+python scripts/patch_sdf_collision.py --manifest output/arch_demo/manifest.json
+```
+- `--variants 8` — **parameter variants to generate per archetype** (set 100 for the full ask).
+- `--archetypes a,b,c` — **comma-separated archetype names** to include (omit for **all 105**).
+- `--out PATH` / `--export-root DIR` — manifest JSON and the exported URDF/SDF/mesh tree.
+- *(other flags)* `--train` CEM-tunes each archetype first (optimized-but-narrower variants;
+  default is raw sampled variants, more diverse); `--iters` / `--samples` are that CEM's
+  budget; `--n-grasps 12`; `--seed 42`.
+
+Then run **exactly the §5 drop test** and **§6 pick-and-place** with
+`--manifest .../arch_demo/manifest.json`. The drop-test / MoveIt summaries print one row per
+archetype; `visual_demo.launch.py method:=mug_like` cycles just that archetype's variants.
+
+> **Scale.** Generation is cheap, but per-object export + grasp synthesis is ~0.5–2 s and the
+> ROS 2 sim is sequential (~3–5 s/object). 105 archetypes × 100 = 10,500 objects is hours of
+> CPU and 10+ hours of sim. For the sim, scope it down (fewer `--variants` or a subset of
+> `--archetypes`); the pure-CPU grasp/diversity eval can run on the full set.
+
+---
+
 ## 7. Full evaluation (all metrics, all seeds)
 
 ```bash
