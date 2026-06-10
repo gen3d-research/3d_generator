@@ -198,6 +198,18 @@ def test_stability_repair_reorients_tippy():
     assert screw.is_connected()  # repair preserves connectivity
 
 
+def test_seed_from_object_biases_distribution():
+    from cem import ParameterDistribution, _SPEC_INDEX
+    from archetypes import ARCHETYPE_REGISTRY
+    d = ParameterDistribution(max_primitives=8)
+    nut = ARCHETYPE_REGISTRY["nut"]()          # hex_prism + torus
+    d.seed_from_object(nut, concentration=0.8)
+    idx = [_SPEC_INDEX[p.ptype] for p in nut.primitives]
+    # the seed's types carry most of the prior mass, and the count prior favors its part count
+    assert d.primitive_type_probs[idx].sum() > 0.7
+    assert int(np.argmax(d.n_primitives_probs)) + 1 == len(nut.primitives)
+
+
 # --- paper-repro preset -----------------------------------------------------
 
 def test_paper_repro_restricts_space():

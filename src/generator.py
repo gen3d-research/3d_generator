@@ -122,8 +122,18 @@ class RoboticObjectGenerator:
         self.distribution = ParameterDistribution(max_primitives=self.config.max_primitives)
         self.is_trained = False
         self.training_history = []
-    
-    def train(self, 
+
+    def seed_from(self, obj_or_name, concentration: float = 0.7):
+        """Point ⑧: warm-start the free distribution from an archetype (by name) or a
+        seed object, then `train()` lets structure evolve from there. Combine with
+        dynamic_stability_gate / repair_stability to evolve a tippy seed into a stable one."""
+        if isinstance(obj_or_name, str):
+            from archetypes import ARCHETYPE_REGISTRY
+            obj_or_name = ARCHETYPE_REGISTRY[obj_or_name]()
+        self.distribution.seed_from_object(obj_or_name, concentration)
+        return self
+
+    def train(self,
               n_iterations: int = None, 
               n_samples: int = None,
               verbose: bool = True) -> List[Dict]:

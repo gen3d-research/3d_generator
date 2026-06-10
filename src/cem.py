@@ -351,6 +351,42 @@ class ParameterDistribution:
         friction = float(np.clip(rng.normal(self.friction_mean, self.friction_std), 0.1, 2.0))
         return CompositeObject(primitives=primitives, name=name, friction=friction)
 
+    def seed_from_object(self, obj, concentration: float = 0.7):
+        """Point ⑧: warm-start this FREE distribution from an archetype's primitives —
+        bias the type/count/size priors toward the seed object, then let the CEM evolve
+        structure freely from there (unlike the parameter-only, anchored archetype path).
+        ``concentration`` in [0,1] = how strongly to favour the seed vs a uniform base."""
+        from collections import Counter
+        c = float(np.clip(concentration, 0.0, 1.0))
+        prims = obj.primitives
+        n_specs = len(PRIMITIVE_SPECS)
+
+        # Primitive-type prior: favour the seed's types in proportion to their count.
+        type_counts = Counter(p.ptype for p in prims)
+        probs = np.full(n_specs, (1.0 - c) / n_specs)
+        for ptype, k in type_counts.items():
+            i = _SPEC_INDEX.get(ptype)
+            if i is not None:
+                probs[i] += c * k / max(len(prims), 1)
+        self.primitive_type_probs = probs / probs.sum()
+
+        # Count prior: favour the seed's number of parts.
+        n = int(np.clip(len(prims), 1, self.max_primitives))
+        nprobs = np.full(self.max_primitives, (1.0 - c) / self.max_primitives)
+        nprobs[n - 1] += c
+        self.n_primitives_probs = nprobs / nprobs.sum()
+
+        # Size prior: set each seeded type's log-mean to its primitives' mean params.
+        for ptype, _ in type_counts.items():
+            i = _SPEC_INDEX.get(ptype)
+            if i is None:
+                continue
+            spec = PRIMITIVE_SPECS[i]
+            vals = [np.clip(spec.extract(p), spec.clamp_lo, spec.clamp_hi)
+                    for p in prims if p.ptype == ptype]
+            self.type_log_means[spec.key] = np.log(np.mean(vals, axis=0))
+        return self
+
     # -- serialization ------------------------------------------------------
 
     def to_dict(self) -> Dict:
