@@ -198,14 +198,24 @@ def main():
         manifest = manifest[:args.max_objects]
 
     results = []
+    consec_fail = 0
+    abort_after = int(os.environ.get("GZ_ABORT_AFTER_FAILS", "6"))
     for k, entry in enumerate(manifest):
         print(f"[{k+1}/{len(manifest)}] {entry['name']} ({entry['method']})",
               flush=True)
         try:
-            results.append(evaluate_one(entry, cfg))
+            r = evaluate_one(entry, cfg)
         except Exception as e:   # never let one object kill the whole worker
-            results.append({"name": entry.get("name"), "method": entry.get("method"),
-                            "spawn_ok": False, "stable": False, "reason": f"error:{e}"})
+            r = {"name": entry.get("name"), "method": entry.get("method"),
+                 "spawn_ok": False, "stable": False, "reason": f"error:{e}"}
+        results.append(r)
+        # If the gz world dies (physics crash), every subsequent spawn fails. Bail out
+        # fast instead of slow-failing the tail, so the caller can restart the world.
+        consec_fail = 0 if r.get("spawn_ok") else consec_fail + 1
+        if consec_fail >= abort_after:
+            print(f"[abort] {consec_fail} consecutive spawn failures — world likely "
+                  f"dead; stopping at {k+1}/{len(manifest)}", flush=True)
+            break
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps({"results": results, "config": cfg}, indent=2))

@@ -342,18 +342,27 @@ ros2_ws/install/generated_objects_eval/bin/gazebo_stability_eval \
 settle.) When done, stop the world: `kill %1` (or `pkill -f "gz sim -s -r"` — a *precise*
 pattern; never `pkill -f "gz sim"`, which can match unrelated shells).
 
-> **One gz session handles the whole manifest** — the evaluator spawns → settles → *despawns*
-> each object in turn, so models don't accumulate (verified: 45 variants spawned + settled
-> 45/45 in a single session). You do **not** need to restart Gazebo between objects.
-> (If you ever see everything after the first ~20 objects report `spawn_ok=False`, it's an
-> external kill of the gz process — most often an over-broad `pkill -f "gz sim"` matching the
-> wrong process. Kill precisely, e.g. `pkill -f "gz sim -s -r"`, or just the launch PID.)
+> **At scale, use the chunked runner — `scripts/run_drop_test_chunked.sh`.** A single gz
+> session is fine for a few dozen objects, but the gz physics engine (ODE) crashes on a small
+> fraction (~0.1%) of meshes — `ODE INTERNAL ERROR … collision_trimesh_trimesh.cpp` — which
+> kills the world, and since `gazebo_stability_eval` writes its JSON only at the end, a single
+> long run can lose everything when a world dies mid-way. The chunked runner processes the
+> manifest in small **fresh-world chunks** across N isolated parallel workers, so a crash
+> loses only one chunk, every chunk is checkpointed, and crashed chunks are retried:
 >
-> **The only real constraint is wall-clock.** Generation is cheap, but per-object export +
-> grasp synthesis is ~0.5–2 s and the sim is sequential (~3–5 s/object). 105 archetypes ×
-> 100 = 10,500 objects is a few hours of CPU and ~10+ hours of sim **in one run** — fine to
-> leave running, but scope it down (fewer `--variants` or a subset of `--archetypes`) if you
-> want a quick pass. The pure-CPU grasp/diversity eval can always run on the full set.
+> ```bash
+> bash scripts/run_drop_test_chunked.sh \
+>     output/arch_variants/manifest.json \
+>     output/arch_variants/gazebo_stability.json 100 4    # chunk=100, 4 workers
+> ```
+> Results group per archetype (`method`), same as the single-world `gazebo_stability_eval`.
+> Tunables via env: `GZ_SVC_TIMEOUT_MS` (gz service wait, default 15000), `GZ_SVC_SUBPROC_S`
+> (subprocess kill, 20), `GZ_ABORT_AFTER_FAILS` (consecutive spawn fails → world-died abort, 5).
+> Measured: 4 workers × ~100-object chunks → ~99% spawn, ~1 chunk/worker every few minutes;
+> 3,150 objects (30/archetype) in ~30 min.
+>
+> Never use the broad `pkill -f "gz sim"` to clean up — it matches any process whose command
+> line merely contains the string; kill precisely (`pkill -f "gz sim -s -r"`) or by PID/group.
 
 ---
 
