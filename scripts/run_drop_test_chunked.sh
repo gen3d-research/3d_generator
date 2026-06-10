@@ -19,6 +19,12 @@ N="${4:-4}"
 SLDIR="$(dirname "$OUT")/_chunks"
 PY="${PYTHON:-$HOME/venv/3d_cem/bin/python}"
 EVAL="$ROOT/ros2_ws/install/generated_objects_eval/bin/gazebo_stability_eval"
+
+# Source ROS 2 + the built workspace so `ros2 launch` and the eval's package import
+# resolve (the eval binary is a console script that imports generated_objects_eval).
+source "${ROS_SETUP:-/opt/ros/jazzy/setup.bash}" 2>/dev/null
+source "$ROOT/ros2_ws/install/setup.bash" 2>/dev/null
+
 rm -rf "$SLDIR"; mkdir -p "$SLDIR"
 
 NCH=$(env -u PYTHONPATH "$PY" - "$MAN" "$SLDIR" "$CHUNK" <<'PYEOF'
