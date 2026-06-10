@@ -95,18 +95,25 @@ Ordered by how directly each addresses the stability claim. **⑥–⑧ are now 
   population reaches mean tip-angle 38.8°, 0/12 tippy (vs the screwdriver's ~11°) — it *deviates*
   toward stability instead of being trapped, cleanly separating "tune the design" (②) from
   "redesign it" (⑧).
-- **⑨ Constrained *optimized* generation.** Combine ⑤'s constraints with training (mask-aware CEM
-  update, skipping the epsilon-smoothing leak): "optimize a stable+graspable object using only
-  curved primitives."
-- **⑩ Pareto / multi-objective front.** Replace the weighted-sum score with an NSGA-II-style front
-  over (stability, graspability, …) so you can *choose* the trade-off instead of baking in weights —
-  and report where on the front the generator sits.
-- **⑪ Conditional / targeted generation.** Condition on a target property vector (size class, grasp
-  width, min stability margin) and optimize toward it — "make me a graspable, very-stable, 6 cm object."
-- **⑫ Text-conditioned (text2geometry).** The workspace is literally `text2geometry_ws`, yet no
-  text→shape path exists. The natural front-end: map a prompt to an **archetype seed + objective
-  weights + constraints**, then hand off to path ④/⑧. This makes the existing optimizer the
-  *decoder* of a text interface — no neural shape model required.
+- **⑨ Constrained *optimized* generation.** ✅ `ParameterDistribution.type_mask` +
+  `RoboticObjectGenerator.constrain_types(keys)` make the CEM update mask-aware (the
+  epsilon-smoothing no longer leaks excluded types), so a palette-constrained generator can be
+  *trained*, not just sampled. Validated: training a curved-only generator keeps faceted mass at
+  0.0000 and emits only curved objects.
+- **⑩ Pareto / multi-objective front.** ✅ `src/pareto.py` (`pareto_front` / `pareto_objects`)
+  returns the non-dominated trade-off set over chosen objectives (e.g. stability vs graspability)
+  instead of the baked-in weighted sum, so you pick the operating point.
+- **⑪ Conditional / targeted generation.** ✅ `ScoringConfig.target_extent` /
+  `generator.target_size(m)` peak the size score at a target overall size. *Caveat:* it's a soft
+  ~12%-weighted term (biases, doesn't tightly hit the target in a short run — up-weight / size-gate
+  / longer train to tighten, same lesson as ⑦).
+- **⑫ Text-conditioned (text2geometry).** ✅ `src/text2gen.py` (`generate_from_text(prompt)`) maps a
+  prompt to a config by composing ⑦/⑧/⑨/⑪ — archetype seed, palette, target size, stability/grasp
+  gates — then hands off to the free CEM. Keyword rules, no neural model: "a small stable graspable
+  curved bottle" → seed=bottle + curved palette + 4 cm + stable+grasp gates. The optimizer is the
+  *decoder* of a text interface.
+
+**All twelve paths are now built.**
 
 ---
 
