@@ -15,6 +15,7 @@ class LearnableParam:
     max_val: float
     is_vector: bool = False
     vector_dim: int = 3
+    prototype: Any = None   # the archetype's canonical default — anchor for `update`
 
 class ArchetypeDistribution:
     """Maintains distributions for a specific archetype's parameters."""
@@ -51,27 +52,23 @@ class ArchetypeDistribution:
                 continue
 
             # Heuristics to set initial distribution based on default values
+            # Variants should stay *recognizable* members of the archetype family, so
+            # keep the spread moderate (±12% std, clamped to 0.6x..1.6x of the default)
+            # and remember the default as the prototype anchor (see `update`). Wide
+            # ranges (the old 0.2x..3.0x) drift far from the shape and let the optimizer
+            # walk off into a high-scoring non-screwdriver.
             if isinstance(param.default, (int, float)):
                 val = float(param.default)
-                # Assume strictly positive dimensions usually
                 self.params[name] = LearnableParam(
-                    name=name,
-                    mean=val,
-                    std=val * 0.3, # 30% variation
-                    min_val=val * 0.2,
-                    max_val=val * 3.0
+                    name=name, mean=val, std=val * 0.12,
+                    min_val=val * 0.6, max_val=val * 1.6, prototype=val,
                 )
             elif isinstance(param.default, np.ndarray):
-                 # Handle vector inputs like dims=np.array([0.1, 0.02, 0.02])
                  val = param.default
                  self.params[name] = LearnableParam(
-                     name=name,
-                     mean=val, # Stored as array in 'mean'
-                     std=val * 0.3,
-                     min_val=val * 0.2,
-                     max_val=val * 3.0,
-                     is_vector=True,
-                     vector_dim=len(val)
+                     name=name, mean=val, std=val * 0.12,
+                     min_val=val * 0.6, max_val=val * 1.6,
+                     is_vector=True, vector_dim=len(val), prototype=np.array(val),
                  )
 
     def sample(self, rng: np.random.Generator) -> Dict[str, Any]:
@@ -110,6 +107,13 @@ class ArchetypeDistribution:
             
             # Update with learning rate
             p.mean = lr * new_mean + (1 - lr) * p.mean
+            # Anchor toward the prototype so the optimum stays a *recognizable* variant
+            # of the archetype (a tuned screwdriver, not a high-scoring blob) rather than
+            # walking to the edge of the parameter box.
+            if p.prototype is not None:
+                anchor = 0.3
+                p.mean = (1 - anchor) * p.mean + anchor * p.prototype
+            p.mean = np.clip(p.mean, p.min_val, p.max_val)
             # Ensure std doesn't collapse to 0
             min_std = p.mean * 0.05 # Keep 5% noise minimum
             p.std = np.maximum(lr * new_std + (1 - lr) * p.std, min_std)
