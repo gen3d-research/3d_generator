@@ -147,11 +147,13 @@ def per_archetype_failure(scores_by_archetype: dict, threshold: float = 0.5
 
 
 def summarize_diversity(objects: List[CompositeObject],
-                        do_chamfer: bool = True) -> dict:
+                        do_chamfer: bool = True, seed: int = 0) -> dict:
     out = {
         "n_objects": len(objects),
         "feature_diversity": feature_diversity(objects, normalize=True),
     }
     if do_chamfer:
-        out["chamfer_diversity"] = chamfer_diversity(objects)
+        # Thread the run seed: chamfer subsamples point clouds, so an unseeded
+        # call makes the reported diversity unreproducible across runs.
+        out["chamfer_diversity"] = chamfer_diversity(objects, seed=seed)
     return out

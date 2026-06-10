@@ -31,10 +31,10 @@ from grasp_planner import grasp_success_rate, GripperSpec                      #
 from diversity import summarize_diversity                                      # noqa: E402
 
 
-def _eval_objects(name, objs, scorer):
+def _eval_objects(name, objs, scorer, seed=0):
     scores = np.array([float(scorer.score(o).total_score) for o in objs])
     grasp = grasp_success_rate(objs, GripperSpec(), n_surface=200, max_pairs=1000)
-    div = summarize_diversity(objs, do_chamfer=True)
+    div = summarize_diversity(objs, do_chamfer=True, seed=seed)
     return {
         "method": name,
         "n_objects": len(objs),
@@ -93,7 +93,7 @@ def main():
     t0 = perf_counter()
     objs, conv, _ = _run_cem(args.budget, args.top_k, args.seed)
     print(f"  done ({perf_counter() - t0:.1f}s)")
-    results.append(_eval_objects("cem", objs, scorer))
+    results.append(_eval_objects("cem", objs, scorer, seed=args.seed))
     convergence["cem"] = conv.tolist()
 
     # ---- Other baselines ----
@@ -103,7 +103,7 @@ def main():
         r = run_baseline(name, budget=args.budget, seed=args.seed,
                          top_k=args.top_k)
         print(f"  done ({perf_counter() - t0:.1f}s)")
-        results.append(_eval_objects(name, r.objects, scorer))
+        results.append(_eval_objects(name, r.objects, scorer, seed=args.seed))
         convergence[name] = r.history_best.tolist()
 
     out_path = Path(args.out)

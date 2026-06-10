@@ -110,6 +110,10 @@ class ScoreBreakdown:
     n_triangles: int = 0
     n_primitives: int = 0
     is_watertight: bool = False
+    # Gate diagnostics (1.0 = gate off / no penalty): the multiplicative factors
+    # applied to total_score by low_grasp_gate and dynamic_stability_gate.
+    grasp_gate: float = 1.0
+    stability_gate: float = 1.0
 
     def to_dict(self) -> Dict:
         return {
@@ -125,7 +129,9 @@ class ScoreBreakdown:
             'n_antipodal_pairs': self.n_antipodal_pairs,
             'n_triangles': self.n_triangles,
             'n_primitives': self.n_primitives,
-            'is_watertight': self.is_watertight
+            'is_watertight': self.is_watertight,
+            'grasp_gate': self.grasp_gate,
+            'stability_gate': self.stability_gate,
         }
 
 
@@ -193,14 +199,15 @@ class ObjectScorer:
         # are unchanged, so v1/box scoring is preserved.
         if self.config.low_grasp_gate:
             g_eff = result.graspability_score * self._part_graspability(obj)
-            gate = float(np.clip(g_eff, self.config.low_grasp_floor, 1.0))
-            result.total_score *= gate
+            result.grasp_gate = float(np.clip(g_eff, self.config.low_grasp_floor, 1.0))
+            result.total_score *= result.grasp_gate
 
         # Dynamic-stability gate (⑦ as a hard requirement): multiplicative penalty by
         # the tip-over stability, so static-stable-but-tippy objects drop below accept.
         if self.config.dynamic_stability_gate:
-            gate = float(np.clip(result.stability_score, self.config.stability_floor, 1.0))
-            result.total_score *= gate
+            result.stability_gate = float(
+                np.clip(result.stability_score, self.config.stability_floor, 1.0))
+            result.total_score *= result.stability_gate
 
         return result
 
