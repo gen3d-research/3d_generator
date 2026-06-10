@@ -53,6 +53,9 @@ class GeneratorConfig:
     # avoids static-stable-but-tippy objects (screwdrivers). Off by default (preserves
     # v1/paper scoring); turn on for drop-stability-aware generation.
     dynamic_stability: bool = False
+    # ⑦ as a HARD gate: multiply the total by the tip-over stability (floored), so the
+    # CEM actually suppresses the tippy tail instead of diluting it as a soft term.
+    dynamic_stability_gate: bool = False
 
     # Export settings
     density: float = 1000.0
@@ -107,6 +110,7 @@ class RoboticObjectGenerator:
             target_primitives=self.config.target_primitives,
             low_grasp_gate=self.config.low_grasp_gate,
             dynamic_stability=self.config.dynamic_stability,
+            dynamic_stability_gate=self.config.dynamic_stability_gate,
         )
         self.scorer = ObjectScorer(self.scoring_config)
         

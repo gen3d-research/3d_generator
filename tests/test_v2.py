@@ -173,6 +173,19 @@ def test_dynamic_stability_penalizes_tippy_not_squat():
     assert dyn.score(mug).stability_score > 0.8
 
 
+def test_dynamic_stability_gate_rejects_tippy():
+    from archetypes import ARCHETYPE_REGISTRY
+    base = ObjectScorer(ScoringConfig())
+    gate = ObjectScorer(ScoringConfig(dynamic_stability_gate=True))
+    screw = ARCHETYPE_REGISTRY["screwdriver"]()
+    mug = ARCHETYPE_REGISTRY["mug_like"]()
+    # The gate tanks a tippy object below the 0.4 accept threshold but leaves a squat
+    # mug essentially unchanged (so the CEM must satisfy drop stability, not just see it).
+    assert base.score(screw).total_score >= 0.4
+    assert gate.score(screw).total_score < 0.4
+    assert gate.score(mug).total_score == pytest.approx(base.score(mug).total_score, abs=0.02)
+
+
 # --- paper-repro preset -----------------------------------------------------
 
 def test_paper_repro_restricts_space():

@@ -80,6 +80,13 @@ class ScoringConfig:
     # the v2 generator turns it on.
     low_grasp_gate: bool = False
     low_grasp_floor: float = 0.25
+    # Dynamic-stability gate (point ⑦ as a HARD requirement): multiply the total by
+    # the tip-over stability, floored at ``stability_floor``. As a soft score term the
+    # tip-over signal is diluted (~18% weight) and the CEM keeps the tippy tail; gating
+    # makes it a near-requirement so tippy objects fall below the accept threshold.
+    # Implies the tip-angle stability metric. Default OFF.
+    dynamic_stability_gate: bool = False
+    stability_floor: float = 0.2
 
 
 @dataclass
@@ -186,6 +193,12 @@ class ObjectScorer:
             gate = float(np.clip(g_eff, self.config.low_grasp_floor, 1.0))
             result.total_score *= gate
 
+        # Dynamic-stability gate (⑦ as a hard requirement): multiplicative penalty by
+        # the tip-over stability, so static-stable-but-tippy objects drop below accept.
+        if self.config.dynamic_stability_gate:
+            gate = float(np.clip(result.stability_score, self.config.stability_floor, 1.0))
+            result.total_score *= gate
+
         return result
 
     def _part_graspability(self, obj: CompositeObject) -> float:
@@ -278,7 +291,7 @@ class ObjectScorer:
             # COM outside support polygon - unstable
             return 0.0, margin
 
-        if self.config.dynamic_stability:
+        if self.config.dynamic_stability or self.config.dynamic_stability_gate:
             # Tip-over-aware (⑦): critical tilt before the COM leaves the support base
             # = atan(margin / COM-height). The horizontal margin alone ignores COM
             # height, so a screwdriver (margin>0 but tall, tiny base) reads as stable
