@@ -64,20 +64,38 @@ def trimesh_to_mesh_msg(mesh: trimesh.Trimesh) -> Mesh:
     return msg
 
 
-def look_at_quaternion(approach: np.ndarray) -> Quaternion:
-    """End-effector pointing along +approach direction (so its tool axis aligns
-    with the gripper closure direction towards the object)."""
-    z_des = -approach / (np.linalg.norm(approach) + 1e-12)
-    ref = np.array([0.0, 0.0, 1.0]) if abs(z_des[2]) < 0.95 else np.array([1.0, 0.0, 0.0])
-    x_des = np.cross(ref, z_des)
-    x_des = x_des / (np.linalg.norm(x_des) + 1e-12)
-    y_des = np.cross(z_des, x_des)
-    R = np.stack([x_des, y_des, z_des], axis=1)
+def _mat_to_quat(R: np.ndarray) -> Quaternion:
     qw = 0.5 * math.sqrt(max(0.0, 1 + R[0, 0] + R[1, 1] + R[2, 2]))
     qx = (R[2, 1] - R[1, 2]) / (4 * qw + 1e-12)
     qy = (R[0, 2] - R[2, 0]) / (4 * qw + 1e-12)
     qz = (R[1, 0] - R[0, 1]) / (4 * qw + 1e-12)
     return make_quaternion(qx, qy, qz, qw)
+
+
+def grasp_quaternion(approach: np.ndarray, axis=None) -> Quaternion:
+    """Grasp orientation for panda_link8 — the demo driver's proven math.
+
+    panda_link8 +z points toward the object, so it aligns WITH the approach
+    (grasp_planner convention: approach = travel direction toward the contacts).
+    The old look_at_quaternion used z = -approach — the hand faced 180 deg the
+    wrong way; kinematic-only planning silently accepted those poses, while
+    collision-aware planning correctly rejected 100% of them (the arm had to
+    reach through the table/object to face backwards). Fingers open along +y =
+    the antipodal contact line when provided."""
+    z = np.asarray(approach, float)
+    z = z / (np.linalg.norm(z) + 1e-12)
+    if axis is not None:
+        a = np.asarray(axis, float)
+        y = a - (a @ z) * z
+    else:
+        y = np.zeros(3)
+    if np.linalg.norm(y) < 1e-6:
+        ref = np.array([1.0, 0.0, 0.0]) if abs(z[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        y = ref - (ref @ z) * z
+    y = y / (np.linalg.norm(y) + 1e-12)
+    x = np.cross(y, z)
+    R = np.stack([x, y, z], axis=1)
+    return _mat_to_quat(R)
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +231,7 @@ def grasps_to_targets(grasps, object_spawn, pre_grasp_offset=0.05) -> List[PoseS
         ps.pose.position.x = float(pre[0])
         ps.pose.position.y = float(pre[1])
         ps.pose.position.z = float(pre[2])
-        ps.pose.orientation = look_at_quaternion(approach)
+        ps.pose.orientation = grasp_quaternion(approach, g.get("axis"))
         out.append(ps)
     return out
 
