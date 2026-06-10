@@ -150,7 +150,10 @@ def evaluate_one(entry: dict, cfg: dict) -> dict:
     stab = cfg["stability"]
     name = entry["name"]
     sdf_path = Path(entry["sdf"]).resolve()
-    spawn_z = spawn["z"] + 0.05
+    # Drop height above the table (GZ_DROP_HEIGHT_M, default 5 cm). Raise it for a more
+    # dramatic fall — the drift metric measures from the table top (the expected rest
+    # height), so a clean settle reads ~0 drift regardless of how high it was dropped.
+    spawn_z = spawn["z"] + float(os.environ.get("GZ_DROP_HEIGHT_M", "0.05"))
 
     ok = spawn_sdf(sdf_path, name, spawn["x"], spawn["y"], spawn_z)
     if not ok:
