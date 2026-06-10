@@ -13,7 +13,8 @@ import subprocess
 import time
 from pathlib import Path
 
-WORLD_NAME = "panda_eval_world"
+import os
+WORLD_NAME = os.environ.get("GZ_EVAL_WORLD", "panda_eval_world")  # keep in sync with generated_objects_eval.constants
 
 
 def _spawn(sdf: Path, name: str, x: float, y: float, z: float) -> bool:

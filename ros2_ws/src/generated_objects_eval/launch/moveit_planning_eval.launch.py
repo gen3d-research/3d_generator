@@ -65,6 +65,7 @@ def _launch_setup(context):
     manifest = LaunchConfiguration("manifest").perform(context)
     out = LaunchConfiguration("out").perform(context)
     max_objects = LaunchConfiguration("max_objects").perform(context)
+    kinematic_only = LaunchConfiguration("kinematic_only").perform(context)
 
     exec_cmd = [
         "moveit_planning_eval",
@@ -72,8 +73,12 @@ def _launch_setup(context):
         "--out", out,
         "--config", str(default_config),
         "--max-objects", str(max_objects),
-        "--ros-args", "--params-file", params_file,
     ]
+    # collision-aware planning is the default; kinematic_only:=true reproduces
+    # the as-submitted metric (no table / object collision objects in the scene).
+    if str(kinematic_only).lower() in ("1", "true", "yes"):
+        exec_cmd.append("--kinematic-only")
+    exec_cmd += ["--ros-args", "--params-file", params_file]
     # robot_state_publisher + joint_state_publisher provide the /joint_states
     # topic that MoveIt's planning_scene_monitor blocks on at startup.
     from launch_ros.actions import Node
@@ -111,5 +116,6 @@ def generate_launch_description():
         DeclareLaunchArgument("manifest"),
         DeclareLaunchArgument("out"),
         DeclareLaunchArgument("max_objects", default_value="0"),
+        DeclareLaunchArgument("kinematic_only", default_value="false"),
         OpaqueFunction(function=_launch_setup),
     ])

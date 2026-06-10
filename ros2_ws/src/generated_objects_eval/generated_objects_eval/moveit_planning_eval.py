@@ -35,7 +35,7 @@ import rclpy
 from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
 from moveit.core.robot_state import RobotState
 from moveit.planning import MoveItPy, PlanRequestParameters
-from moveit_msgs.msg import CollisionObject
+from moveit_msgs.msg import CollisionObject, PlanningScene, PlanningSceneWorld
 from rclpy.logging import get_logger
 from shape_msgs.msg import Mesh, MeshTriangle, SolidPrimitive
 from std_msgs.msg import Header
@@ -84,7 +84,7 @@ def look_at_quaternion(approach: np.ndarray) -> Quaternion:
 
 class PlanningEvaluator:
     def __init__(self, planner_id: str, planning_time: float,
-                 planning_group: str = "panda_arm"):
+                 planning_group: str = "panda_arm", collision_aware: bool = True):
         self.moveit_py = MoveItPy(node_name="moveit_planning_eval")
         self.arm = self.moveit_py.get_planning_component(planning_group)
         self.planning_scene = self.moveit_py.get_planning_scene_monitor()
@@ -92,18 +92,55 @@ class PlanningEvaluator:
         self.planning_group = planning_group
         self.planner_id = planner_id
         self.planning_time = planning_time
+        self.collision_aware = collision_aware
 
-        # The 'apply_collision_object' python binding segfaults in
-        # moveit_py 2.12.x; publishing the CollisionObject on /collision_object
-        # is the documented alternative and the planning_scene_monitor's
-        # subscriber picks it up asynchronously.
+        # Collision objects reach MoveIt via /planning_scene DIFFS — the
+        # apply_collision_object python binding segfaults in moveit_py 2.12.x,
+        # but the latched planning-scene-diff topic is the pattern the demo
+        # driver has used successfully all along (see demo_plan_driver /
+        # README): the planning_scene_monitor ingests the diff asynchronously.
         self._helper_node = rclpy.create_node("moveit_planning_eval_helper")
-        from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-        qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
-                         history=HistoryPolicy.KEEP_LAST, depth=10)
-        self._collision_pub = self._helper_node.create_publisher(
-            CollisionObject, "/collision_object", qos)
-        self._planning_scene_pub = None  # set lazily if needed
+        from rclpy.qos import (QoSProfile, ReliabilityPolicy, HistoryPolicy,
+                               DurabilityPolicy)
+        latched = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
+                             durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                             history=HistoryPolicy.KEEP_LAST, depth=1)
+        self._planning_scene_pub = self._helper_node.create_publisher(
+            PlanningScene, "/planning_scene", latched)
+        if self.collision_aware:
+            self._publish_table()
+
+    def _publish_diff(self, co: CollisionObject, settle_s: float = 0.25):
+        scene = PlanningScene()
+        scene.is_diff = True
+        scene.world = PlanningSceneWorld()
+        scene.world.collision_objects = [co]
+        self._planning_scene_pub.publish(scene)
+        import time
+        time.sleep(settle_s)   # let the planning_scene_monitor ingest the diff
+
+    def _publish_table(self, table_pose=(0.5, 0.0, 0.2), table_size=(0.8, 0.8, 0.4),
+                       top_clearance: float = 0.015):
+        """The table the objects rest on (matches panda_eval_world + the demo).
+        Top shrunk by `top_clearance` so a fingertip touching the tabletop is not
+        itself a collision (same convention as demo_plan_driver.publish_scene)."""
+        co = CollisionObject()
+        co.header.frame_id = "panda_link0"
+        co.id = "eval_table"
+        co.operation = CollisionObject.ADD
+        prim = SolidPrimitive()
+        prim.type = SolidPrimitive.BOX
+        prim.dimensions = [float(table_size[0]), float(table_size[1]),
+                           float(table_size[2]) - top_clearance]
+        pose = Pose()
+        pose.position.x = float(table_pose[0])
+        pose.position.y = float(table_pose[1])
+        pose.position.z = float(table_pose[2]) - top_clearance / 2.0
+        pose.orientation.w = 1.0
+        co.primitives = [prim]
+        co.primitive_poses = [pose]
+        self._publish_diff(co, settle_s=0.4)
+        LOGGER.info("collision-aware: table published to the planning scene")
 
     def reset_to_home(self):
         # ``set_start_state_to_current_state`` is racy when the
@@ -115,27 +152,28 @@ class PlanningEvaluator:
         self.arm.set_start_state(configuration_name="ready")
 
     def set_collision_mesh(self, name: str, mesh_path: Path, pose: Pose):
-        # The MoveIt 2.12.x planning_scene_monitor segfaults when processing
-        # a CollisionObject published from a sibling node; both the
-        # apply_collision_object python binding and the /collision_object
-        # topic path trigger the crash in the C++ side.  The metric we
-        # actually want is whether the Panda can reach the pre-grasp pose
-        # generated for each object, which is a function of the object's
-        # placement (encoded in the pre-grasp pose itself) and the arm's
-        # kinematic reach --- not arm-vs-object collision, since the small
-        # generated objects sit on a table 50 cm from the base.  We therefore
-        # skip the collision-object publish and report the kinematic
-        # planning-success rate directly.
-        pass
+        """Add the object's real collision mesh to the planning scene (diff topic).
+        No-op in kinematic-only mode (collision_aware=False reproduces the
+        as-submitted metric)."""
+        if not self.collision_aware:
+            return
+        tm = trimesh.load(str(mesh_path), force="mesh")
+        co = CollisionObject()
+        co.header.frame_id = "panda_link0"
+        co.id = name
+        co.operation = CollisionObject.ADD
+        co.meshes = [trimesh_to_mesh_msg(tm)]
+        co.mesh_poses = [pose]
+        self._publish_diff(co)
 
     def clear_scene(self, name: str):
+        if not self.collision_aware:
+            return
         co = CollisionObject()
         co.header.frame_id = "panda_link0"
         co.id = name
         co.operation = CollisionObject.REMOVE
-        self._collision_pub.publish(co)
-        import time
-        time.sleep(0.1)
+        self._publish_diff(co, settle_s=0.1)
 
     def plan_to(self, target: PoseStamped, attempts: int = 5) -> dict:
         self.reset_to_home()
@@ -171,7 +209,8 @@ def grasps_to_targets(grasps, object_spawn, pre_grasp_offset=0.05) -> List[PoseS
     return out
 
 
-def run(manifest_path: Path, out_path: Path, config: dict, max_objects: int = 0):
+def run(manifest_path: Path, out_path: Path, config: dict, max_objects: int = 0,
+        collision_aware: bool = True):
     with manifest_path.open() as f:
         manifest = json.load(f)
     if max_objects and max_objects > 0:
@@ -181,7 +220,8 @@ def run(manifest_path: Path, out_path: Path, config: dict, max_objects: int = 0)
 
     evaluator = PlanningEvaluator(planner_id=plan_cfg["planner_id"],
                                   planning_time=plan_cfg["planning_time_s"],
-                                  planning_group=plan_cfg["planning_group"])
+                                  planning_group=plan_cfg["planning_group"],
+                                  collision_aware=collision_aware)
     results = []
     for k, entry in enumerate(manifest):
         LOGGER.info(f"[{k+1}/{len(manifest)}] {entry['name']} ({entry['method']})")
@@ -191,9 +231,10 @@ def run(manifest_path: Path, out_path: Path, config: dict, max_objects: int = 0)
         spawn_pose.position.z = float(spawn_cfg["z"])
         spawn_pose.orientation.w = 1.0
         try:
-            evaluator.set_collision_mesh(entry["name"],
-                                         Path(entry["visual_mesh"]),
-                                         spawn_pose)
+            evaluator.set_collision_mesh(
+                entry["name"],
+                Path(entry.get("collision_mesh") or entry["visual_mesh"]),
+                spawn_pose)
         except Exception as exc:
             LOGGER.error(f"Failed to set collision mesh: {exc}")
             results.append({"name": entry["name"], "method": entry["method"],
@@ -250,6 +291,9 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--max-objects", type=int, default=0)
+    parser.add_argument("--kinematic-only", action="store_true",
+                        help="skip planning-scene collision objects (reproduces the "
+                             "as-submitted kinematic-only metric)")
     args = parser.parse_args(argv[1:])
 
     import yaml
@@ -257,7 +301,8 @@ def main():
 
     rclpy.init()
     try:
-        run(args.manifest, args.out, cfg, args.max_objects)
+        run(args.manifest, args.out, cfg, args.max_objects,
+            collision_aware=not args.kinematic_only)
     finally:
         rclpy.shutdown()
 

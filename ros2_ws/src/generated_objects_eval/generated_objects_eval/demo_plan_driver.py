@@ -43,7 +43,7 @@ from std_msgs.msg import ColorRGBA, Header, Float64MultiArray
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from visualization_msgs.msg import Marker, MarkerArray
 
-WORLD_NAME = "panda_eval_world"
+from generated_objects_eval.constants import WORLD_NAME  # noqa: E402  (shared; env GZ_EVAL_WORLD overrides)
 PANDA_JOINT_NAMES = [
     "panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4",
     "panda_joint5", "panda_joint6", "panda_joint7",

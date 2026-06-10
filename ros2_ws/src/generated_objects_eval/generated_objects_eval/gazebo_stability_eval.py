@@ -36,7 +36,7 @@ from typing import Optional
 
 import numpy as np
 
-WORLD_NAME = "panda_eval_world"
+from generated_objects_eval.constants import WORLD_NAME  # noqa: E402  (shared; env GZ_EVAL_WORLD overrides)
 
 
 # ---------------------------------------------------------------------------
@@ -119,18 +119,27 @@ def settle(settle_time_s: float, wall_timeout_factor: float = 10.0):
         time.sleep(0.2)
 
 
-def despawn(name: str):
+def despawn(name: str, retries: int = 3):
+    """Remove a model, retrying transient transport glitches. A stale leftover is
+    worse than it looks: TWO mesh-collision objects overlapping is what triggers
+    ODE's trimesh-trimesh assert and kills the world."""
     gz_ms = os.environ.get("GZ_SVC_TIMEOUT_MS", "15000")
     sub_s = float(os.environ.get("GZ_SVC_SUBPROC_S", "22"))
     req = f'name: "{name}", type: MODEL'
-    try:
-        _run([
-            "gz", "service", "-s", f"/world/{WORLD_NAME}/remove",
-            "--reqtype", "gz.msgs.Entity", "--reptype", "gz.msgs.Boolean",
-            "--timeout", gz_ms, "--req", req,
-        ], timeout=sub_s)
-    except subprocess.SubprocessError:
-        pass   # a stale model left in the world is fine — query_pose filters by name
+    for attempt in range(retries):
+        try:
+            proc = _run([
+                "gz", "service", "-s", f"/world/{WORLD_NAME}/remove",
+                "--reqtype", "gz.msgs.Entity", "--reptype", "gz.msgs.Boolean",
+                "--timeout", gz_ms, "--req", req,
+            ], timeout=sub_s)
+            if proc.returncode == 0 and b"data: true" in proc.stdout:
+                return
+        except subprocess.SubprocessError:
+            pass
+        time.sleep(0.5)
+    print(f"warning: failed to despawn {name} after {retries} attempts — "
+          f"a stale model may remain in the world", flush=True)
 
 
 # Parse one snapshot of /world/<world>/pose/info text output into a name->pose dict.
