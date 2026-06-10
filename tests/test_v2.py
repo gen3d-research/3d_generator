@@ -259,6 +259,34 @@ def test_text2gen_no_duplicate_kwarg():
     assert it["graspable"] and g.config.low_grasp_gate  # prompt's explicit ask wins
 
 
+def test_per_primitive_collision_export(tmp_path):
+    """v2.9: the exporter emits one collision per primitive — native shapes for
+    box/cylinder/sphere (capsule = cylinder + 2 spheres), convex-hull mesh pieces
+    otherwise — so gz never hits ODE's trimesh-trimesh collider on native pairs."""
+    import xml.etree.ElementTree as ET
+    from export import URDFExporter, ExportConfig
+    from archetypes import ARCHETYPE_REGISTRY
+    exp = URDFExporter(ExportConfig())          # per_primitive_collision default True
+    obj = ARCHETYPE_REGISTRY["hammer"]()        # box head + cylinder handle
+    obj.name = "t_hammer"
+    paths = exp.export(obj, tmp_path / "h", "t_hammer")
+    root = ET.parse(paths["sdf"]).getroot()
+    cols = root.findall(".//collision")
+    assert len(cols) == len(obj.primitives)
+    kinds = {("box" if c.find("geometry/box") is not None else
+              "cylinder" if c.find("geometry/cylinder") is not None else "other")
+             for c in cols}
+    assert kinds == {"box", "cylinder"}         # both native, no mesh collider
+    # every collision carries its own surface block (so the friction patch applies)
+    assert all(c.find("surface/friction/ode/mu") is not None for c in cols)
+    # legacy single-mesh path still available
+    exp2 = URDFExporter(ExportConfig(per_primitive_collision=False))
+    p2 = exp2.export(obj, tmp_path / "h2", "t_hammer2")
+    root2 = ET.parse(p2["sdf"]).getroot()
+    cols2 = root2.findall(".//collision")
+    assert len(cols2) == 1 and cols2[0].find("geometry/mesh") is not None
+
+
 def test_type_mask_serialization_roundtrip():
     d = ParameterDistribution(max_primitives=6)
     mask = np.zeros(len(PRIMITIVE_SPECS)); mask[:3] = 1.0

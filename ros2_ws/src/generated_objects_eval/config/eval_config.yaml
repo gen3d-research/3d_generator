@@ -25,3 +25,9 @@ stability:
   settle_time_s: 2.0
   upright_tolerance_deg: 25.0
   drift_tolerance_m: 0.05
+  # Explicit, reproducible spawn perturbation (deg of initial tilt about x).
+  # With clean per-primitive collisions a perfectly vertical drop lets a
+  # metastable object (screwdriver on its handle base) stand; tessellated-mesh
+  # contact noise used to topple it by accident. 5 deg restores the metric's
+  # discrimination on principled grounds. Env override: GZ_SPAWN_TILT_DEG.
+  spawn_tilt_deg: 5.0

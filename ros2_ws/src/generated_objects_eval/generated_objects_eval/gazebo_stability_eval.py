@@ -45,12 +45,20 @@ def _run(cmd: list[str], timeout: float = 5.0) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, timeout=timeout)
 
 
-def spawn_sdf(sdf_path: Path, name: str, x: float, y: float, z: float) -> bool:
+def spawn_sdf(sdf_path: Path, name: str, x: float, y: float, z: float,
+              tilt_deg: float = 0.0) -> bool:
+    # Explicit spawn perturbation (GZ_SPAWN_TILT_DEG / stability.spawn_tilt_deg):
+    # with clean per-primitive collisions a metastable object (screwdriver on its
+    # handle base) survives a perfectly vertical drop — tessellated-mesh contact
+    # noise used to knock it over *by accident*. A small, reproducible initial
+    # tilt restores the metric's discrimination on principled grounds.
+    half = math.radians(tilt_deg) / 2.0
+    qx, qw = math.sin(half), math.cos(half)
     req = (
         f'sdf_filename: "{sdf_path}", '
         f'name: "{name}", '
         f'pose: {{position: {{x: {x}, y: {y}, z: {z}}}, '
-        f'orientation: {{w: 1.0}}}}'
+        f'orientation: {{x: {qx:.6f}, w: {qw:.6f}}}}}'
     )
     # Generous service timeout: under parallel gz worlds the create response can
     # take well over the old 3 s, which silently turned into spawn_ok=False. The gz
@@ -154,8 +162,11 @@ def evaluate_one(entry: dict, cfg: dict) -> dict:
     # dramatic fall — the drift metric measures from the table top (the expected rest
     # height), so a clean settle reads ~0 drift regardless of how high it was dropped.
     spawn_z = spawn["z"] + float(os.environ.get("GZ_DROP_HEIGHT_M", "0.05"))
+    # Spawn tilt: env var wins, else stability.spawn_tilt_deg from the config, else 0.
+    tilt_deg = float(os.environ.get("GZ_SPAWN_TILT_DEG",
+                                    stab.get("spawn_tilt_deg", 0.0)))
 
-    ok = spawn_sdf(sdf_path, name, spawn["x"], spawn["y"], spawn_z)
+    ok = spawn_sdf(sdf_path, name, spawn["x"], spawn["y"], spawn_z, tilt_deg=tilt_deg)
     if not ok:
         return {"name": name, "method": entry["method"],
                 "spawn_ok": False, "stable": False}

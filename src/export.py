@@ -18,7 +18,13 @@ from xml.dom import minidom
 import yaml
 import shutil
 
-from primitives import CompositeObject
+from primitives import CompositeObject, PrimitiveType
+
+
+def _rpy_from_matrix(R: np.ndarray):
+    """Rotation matrix -> URDF/SDF fixed-axis roll-pitch-yaw."""
+    from scipy.spatial.transform import Rotation
+    return Rotation.from_matrix(np.asarray(R, dtype=float)).as_euler('xyz')
 
 
 @dataclass
@@ -28,11 +34,21 @@ class ExportConfig:
     friction_mu1: float = 0.8         # Coulomb friction
     friction_mu2: float = 0.8         # Torsional friction
     restitution: float = 0.1          # Bounce coefficient
-    
+
     # Mesh simplification
     simplify_collision: bool = True
     max_collision_faces: int = 500
     use_convex_hull: bool = False     # Use convex hull for collision
+
+    # v2.9 default (True): emit ONE collision element PER PRIMITIVE — native
+    # box/cylinder/sphere shapes where exact (capsule = cylinder + 2 spheres),
+    # a small per-primitive convex-hull mesh otherwise. Native/convex pairs
+    # bypass ODE's fragile trimesh-trimesh collider (the assert that killed gz
+    # worlds at scale when a failed despawn left two mesh objects overlapping)
+    # and are much cheaper than one big non-convex mesh. The single
+    # collision-mesh OBJ is still written for MoveIt planning-scene use.
+    # Set False for the legacy single-mesh collision.
+    per_primitive_collision: bool = True
 
     # Inertia computation. v2 default (True) computes overlap-aware
     # mass/COM/inertia from the boolean-union solid (correct for overlapping
@@ -113,21 +129,30 @@ class URDFExporter:
         visual_mesh.export(visual_path, include_normals=True)
         collision_mesh.export(collision_path, include_normals=True)
         
+        # Collision decomposition: per-primitive (v2.9 default) or the legacy
+        # single mesh. The collision-mesh OBJ above is always written — MoveIt
+        # planning scenes load it from the manifest regardless of this choice.
+        if self.config.per_primitive_collision:
+            collisions = self._collision_entries(obj, name, meshes_dir, ext)
+        else:
+            collisions = [{"kind": "mesh", "uri": f"meshes/{name}_collision.{ext}",
+                           "R": np.eye(3), "t": np.zeros(3)}]
+
         # Generate URDF
         urdf_path = output_dir / f"{name}.urdf"
         self._write_urdf(
             urdf_path, name, mass, inertia, com,
             f"meshes/{name}_visual.{ext}",
-            f"meshes/{name}_collision.{ext}"
+            collisions
         )
-        
+
         # Generate SDF (Gazebo)
         sdf_path = output_dir / f"{name}.sdf"
         friction_val = getattr(obj, 'friction', self.config.friction_mu1)
         self._write_sdf(
             sdf_path, name, mass, inertia, com,
             f"meshes/{name}_visual.{ext}",
-            f"meshes/{name}_collision.{ext}",
+            collisions,
             friction_coeff=friction_val
         )
         
@@ -145,6 +170,56 @@ class URDFExporter:
             'metadata': metadata_path
         }
     
+    def _collision_entries(self, obj: CompositeObject, name: str,
+                           meshes_dir: Path, ext: str) -> list:
+        """Decompose the object into per-primitive collision entries.
+
+        Native analytic shapes wherever they are exact:
+          box / cylinder / sphere  -> native, posed by the primitive transform
+          capsule                  -> cylinder + 2 spheres (native everywhere;
+                                      SDF < 1.8 has no <capsule>)
+        Everything else contributes its own WORLD-FRAME convex-hull mesh piece
+        with identity pose — several primitive types recenter their meshes on
+        the centroid, so reusing the already-placed mesh avoids any frame
+        bookkeeping. Hull pieces are small, convex, and watertight. Non-convex
+        types (torus, handle, hollow_shell, open_tube, gear, profile) lose their
+        concavity in gz collision only; MoveIt keeps the true mesh.
+        """
+        entries = []
+        for i, p in enumerate(obj.primitives):
+            R = np.asarray(p.transform.rotation, dtype=float)
+            t = np.asarray(p.transform.translation, dtype=float)
+            k = p.ptype
+            if k == PrimitiveType.BOX:
+                entries.append({"kind": "box",
+                                "size": np.asarray(p.dimensions, float),
+                                "R": R, "t": t})
+            elif k == PrimitiveType.CYLINDER:
+                entries.append({"kind": "cylinder", "radius": float(p.radius),
+                                "length": float(p.height), "R": R, "t": t})
+            elif k == PrimitiveType.SPHERE:
+                entries.append({"kind": "sphere", "radius": float(p.radius),
+                                "R": R, "t": t})
+            elif k == PrimitiveType.CAPSULE:
+                entries.append({"kind": "cylinder", "radius": float(p.radius),
+                                "length": float(p.height), "R": R, "t": t})
+                for s in (-1.0, 1.0):
+                    c = t + R @ np.array([0.0, 0.0, s * float(p.height) / 2.0])
+                    entries.append({"kind": "sphere", "radius": float(p.radius),
+                                    "R": np.eye(3), "t": c})
+            else:
+                piece = p.to_mesh()
+                try:
+                    piece = piece.convex_hull
+                except Exception:
+                    pass
+                rel = f"meshes/{name}_col{i}.{ext}"
+                piece.export(meshes_dir / f"{name}_col{i}.{ext}",
+                             include_normals=True)
+                entries.append({"kind": "mesh", "uri": rel,
+                                "R": np.eye(3), "t": np.zeros(3)})
+        return entries
+
     def _prepare_collision_mesh(self, mesh: trimesh.Trimesh) -> trimesh.Trimesh:
         """Prepare simplified collision geometry."""
         if self.config.use_convex_hull:
@@ -165,9 +240,9 @@ class URDFExporter:
         
         return mesh
     
-    def _write_urdf(self, path: Path, name: str, mass: float, 
+    def _write_urdf(self, path: Path, name: str, mass: float,
                     inertia: np.ndarray, com: np.ndarray,
-                    visual_mesh_path: str, collision_mesh_path: str):
+                    visual_mesh_path: str, collisions: list):
         """Write URDF file."""
         robot = ET.Element('robot', name=name)
         
@@ -200,11 +275,26 @@ class URDFExporter:
         ET.SubElement(vis_material, 'color', 
                       rgba=f'{rgba[0]} {rgba[1]} {rgba[2]} {rgba[3]}')
         
-        # Collision
-        collision = ET.SubElement(link, 'collision')
-        col_geom = ET.SubElement(collision, 'geometry')
-        ET.SubElement(col_geom, 'mesh', filename=collision_mesh_path)
-        
+        # Collision element(s) — one per entry (native shape or mesh piece).
+        for c in collisions:
+            collision = ET.SubElement(link, 'collision')
+            xyz = c["t"]
+            rpy = _rpy_from_matrix(c["R"])
+            ET.SubElement(collision, 'origin',
+                          xyz=f'{xyz[0]:.6f} {xyz[1]:.6f} {xyz[2]:.6f}',
+                          rpy=f'{rpy[0]:.6f} {rpy[1]:.6f} {rpy[2]:.6f}')
+            col_geom = ET.SubElement(collision, 'geometry')
+            if c["kind"] == "box":
+                s = c["size"]
+                ET.SubElement(col_geom, 'box', size=f'{s[0]:.6f} {s[1]:.6f} {s[2]:.6f}')
+            elif c["kind"] == "cylinder":
+                ET.SubElement(col_geom, 'cylinder',
+                              radius=f'{c["radius"]:.6f}', length=f'{c["length"]:.6f}')
+            elif c["kind"] == "sphere":
+                ET.SubElement(col_geom, 'sphere', radius=f'{c["radius"]:.6f}')
+            else:
+                ET.SubElement(col_geom, 'mesh', filename=c["uri"])
+
         # Write formatted XML
         xml_str = minidom.parseString(ET.tostring(robot)).toprettyxml(indent='  ')
         # Remove extra blank lines
@@ -215,7 +305,7 @@ class URDFExporter:
     
     def _write_sdf(self, path: Path, name: str, mass: float,
                    inertia: np.ndarray, com: np.ndarray,
-                   visual_mesh_path: str, collision_mesh_path: str,
+                   visual_mesh_path: str, collisions: list,
                    friction_coeff: float = 0.8):
         """Write SDF file (Gazebo format)."""
         sdf = ET.Element('sdf', version='1.7')
@@ -252,21 +342,40 @@ class URDFExporter:
         rgba = self.config.color_rgba
         diffuse.text = f'{rgba[0]} {rgba[1]} {rgba[2]} {rgba[3]}'
         
-        # Collision
-        collision = ET.SubElement(link, 'collision', name=f'{name}_collision')
-        col_geom = ET.SubElement(collision, 'geometry')
-        col_mesh = ET.SubElement(col_geom, 'mesh')
-        ET.SubElement(col_mesh, 'uri').text = collision_mesh_path
-        
-        # Surface properties
-        surface = ET.SubElement(collision, 'surface')
-        friction = ET.SubElement(surface, 'friction')
-        ode = ET.SubElement(friction, 'ode')
-        ET.SubElement(ode, 'mu').text = f'{friction_coeff}'
-        ET.SubElement(ode, 'mu2').text = f'{friction_coeff}'
-        
-        bounce = ET.SubElement(surface, 'bounce')
-        ET.SubElement(bounce, 'restitution_coefficient').text = f'{self.config.restitution}'
+        # Collision element(s) — one per entry, each with its own surface block
+        # (patch_sdf_collision substitutes every <mu> and prepends <contact> to
+        # every <friction>, so the patch applies to all of them).
+        for j, c in enumerate(collisions):
+            collision = ET.SubElement(link, 'collision', name=f'{name}_collision_{j}')
+            xyz = c["t"]
+            rpy = _rpy_from_matrix(c["R"])
+            ET.SubElement(collision, 'pose').text = (
+                f'{xyz[0]:.6f} {xyz[1]:.6f} {xyz[2]:.6f} '
+                f'{rpy[0]:.6f} {rpy[1]:.6f} {rpy[2]:.6f}')
+            col_geom = ET.SubElement(collision, 'geometry')
+            if c["kind"] == "box":
+                s = c["size"]
+                box = ET.SubElement(col_geom, 'box')
+                ET.SubElement(box, 'size').text = f'{s[0]:.6f} {s[1]:.6f} {s[2]:.6f}'
+            elif c["kind"] == "cylinder":
+                cyl = ET.SubElement(col_geom, 'cylinder')
+                ET.SubElement(cyl, 'radius').text = f'{c["radius"]:.6f}'
+                ET.SubElement(cyl, 'length').text = f'{c["length"]:.6f}'
+            elif c["kind"] == "sphere":
+                sph = ET.SubElement(col_geom, 'sphere')
+                ET.SubElement(sph, 'radius').text = f'{c["radius"]:.6f}'
+            else:
+                col_mesh = ET.SubElement(col_geom, 'mesh')
+                ET.SubElement(col_mesh, 'uri').text = c["uri"]
+
+            surface = ET.SubElement(collision, 'surface')
+            friction = ET.SubElement(surface, 'friction')
+            ode = ET.SubElement(friction, 'ode')
+            ET.SubElement(ode, 'mu').text = f'{friction_coeff}'
+            ET.SubElement(ode, 'mu2').text = f'{friction_coeff}'
+
+            bounce = ET.SubElement(surface, 'bounce')
+            ET.SubElement(bounce, 'restitution_coefficient').text = f'{self.config.restitution}'
         
         # Write formatted XML
         xml_str = minidom.parseString(ET.tostring(sdf)).toprettyxml(indent='  ')
