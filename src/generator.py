@@ -133,6 +133,21 @@ class RoboticObjectGenerator:
         self.distribution.seed_from_object(obj_or_name, concentration)
         return self
 
+    def constrain_types(self, keys):
+        """Point ⑨: restrict generation to a subset of primitive types AND keep the CEM
+        update inside it (mask-aware), so a palette-constrained generator can be *trained*
+        (e.g. 'optimize a stable+graspable object using only curved primitives'), not just
+        sampled. `keys` are PRIMITIVE_SPECS keys (e.g. cylinder, sphere, frustum)."""
+        from cem import PRIMITIVE_SPECS
+        keyidx = {s.key: i for i, s in enumerate(PRIMITIVE_SPECS)}
+        mask = np.zeros(len(PRIMITIVE_SPECS))
+        for k in keys:
+            if k in keyidx:
+                mask[keyidx[k]] = 1.0
+        self.distribution.type_mask = mask
+        self.distribution.primitive_type_probs = mask / mask.sum()
+        return self
+
     def train(self,
               n_iterations: int = None, 
               n_samples: int = None,

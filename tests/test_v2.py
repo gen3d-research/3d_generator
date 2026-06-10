@@ -210,6 +210,27 @@ def test_seed_from_object_biases_distribution():
     assert int(np.argmax(d.n_primitives_probs)) + 1 == len(nut.primitives)
 
 
+def test_constrained_training_keeps_palette():
+    from cem import PRIMITIVE_SPECS
+    curved = ["cylinder", "sphere", "capsule", "cone", "torus", "ellipsoid",
+              "hollow_shell", "handle", "frustum", "hemisphere"]
+    g = generator.RoboticObjectGenerator(
+        generator.GeneratorConfig(seed=1, max_primitives=4, cem_iterations=4, cem_samples=20))
+    g.constrain_types(curved)
+    g.train(verbose=False)
+    tp = g.distribution.primitive_type_probs
+    faceted = sum(tp[i] for i, s in enumerate(PRIMITIVE_SPECS) if s.key not in curved)
+    assert faceted < 1e-6   # mask-aware update keeps disallowed types at zero through training
+
+
+def test_pareto_front_is_nondominated():
+    from pareto import pareto_front
+    items = ["a", "b", "c", "d"]
+    objs = [[1.0, 0.2], [0.2, 1.0], [0.5, 0.5], [0.1, 0.1]]  # d is dominated by all
+    front, _ = pareto_front(items, objs)
+    assert "d" not in front and "a" in front and "b" in front
+
+
 # --- paper-repro preset -----------------------------------------------------
 
 def test_paper_repro_restricts_space():

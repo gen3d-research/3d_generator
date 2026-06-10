@@ -259,6 +259,10 @@ class ParameterDistribution:
     # enough to stay robust to the approximate half_extents of asymmetric
     # primitives (cone/pyramid/wedge).
     attach_overlap: float = 0.4
+    # Point ⑨: if set (0/1 per type), the CEM update keeps disallowed types at zero
+    # (the epsilon-smoothing otherwise re-introduces them), so a palette-constrained
+    # generator can be TRAINED, not just sampled.
+    type_mask: Optional[np.ndarray] = None
 
     def __post_init__(self):
         if self.n_primitives_probs is None:
@@ -569,6 +573,11 @@ class CEMOptimizer:
             new_probs = (new_probs + 0.01) / (new_probs + 0.01).sum()
             dist.primitive_type_probs = _cap_type_probs(
                 lr * new_probs + (1 - lr) * dist.primitive_type_probs)
+            # ⑨: re-impose the palette constraint the epsilon-smoothing just leaked.
+            if dist.type_mask is not None:
+                masked = dist.primitive_type_probs * dist.type_mask
+                if masked.sum() > 0:
+                    dist.primitive_type_probs = masked / masked.sum()
 
         # Per-type size parameters (log-space)
         for ti, spec in enumerate(PRIMITIVE_SPECS):
