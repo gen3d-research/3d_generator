@@ -159,6 +159,20 @@ def test_low_grasp_gate_penalizes_ungraspable_not_graspable():
     assert on.score(cone).total_score < 0.4
 
 
+def test_dynamic_stability_penalizes_tippy_not_squat():
+    from archetypes import ARCHETYPE_REGISTRY
+    stat = ObjectScorer(ScoringConfig())
+    dyn = ObjectScorer(ScoringConfig(dynamic_stability=True))
+    screw = ARCHETYPE_REGISTRY["screwdriver"]()
+    mug = ARCHETYPE_REGISTRY["mug_like"]()
+    # The static proxy rates the tall screwdriver as fairly stable; the tip-over-aware
+    # dynamic metric correctly penalizes it (it tips in a real drop), while a squat mug
+    # stays high under both.
+    assert stat.score(screw).stability_score > 0.6
+    assert dyn.score(screw).stability_score < 0.4
+    assert dyn.score(mug).stability_score > 0.8
+
+
 # --- paper-repro preset -----------------------------------------------------
 
 def test_paper_repro_restricts_space():

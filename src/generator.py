@@ -49,6 +49,10 @@ class GeneratorConfig:
     # fraction so the CEM stops favoring ungraspable cone/pyramid parts. On by
     # default for v2; paper_repro turns it off to preserve v1 scoring.
     low_grasp_gate: bool = True
+    # Point ⑦: score the dynamic tip-over margin (atan(margin/COM-height)) so the CEM
+    # avoids static-stable-but-tippy objects (screwdrivers). Off by default (preserves
+    # v1/paper scoring); turn on for drop-stability-aware generation.
+    dynamic_stability: bool = False
 
     # Export settings
     density: float = 1000.0
@@ -102,6 +106,7 @@ class RoboticObjectGenerator:
             assembly_weight=self.config.assembly_weight,
             target_primitives=self.config.target_primitives,
             low_grasp_gate=self.config.low_grasp_gate,
+            dynamic_stability=self.config.dynamic_stability,
         )
         self.scorer = ObjectScorer(self.scoring_config)
         

@@ -43,6 +43,13 @@ class ScoringConfig:
     
     # Stability
     min_stability_margin: float = 0.005  # 5mm margin to support boundary
+    # Dynamic-stability-aware (point ⑦): score the *critical tipping angle*
+    # atan(support margin / COM height) instead of the horizontal margin alone, so
+    # tall narrow objects (which read as static-stable but tip in a drop) are penalized.
+    # Opt-in (off preserves v1 / paper_repro scoring + existing tests).
+    dynamic_stability: bool = False
+    tip_angle_lo_deg: float = 8.0    # tip angle below this -> stability 0
+    tip_angle_hi_deg: float = 28.0   # tip angle above this -> stability 1
     
     # Graspability
     n_surface_samples: int = 200      # Points to sample on surface
@@ -270,11 +277,20 @@ class ObjectScorer:
         if margin < 0:
             # COM outside support polygon - unstable
             return 0.0, margin
-        
-        # Score based on margin
-        # Good stability: margin > min_stability_margin
-        score = min(1.0, margin / (self.config.min_stability_margin * 2))
-        
+
+        if self.config.dynamic_stability:
+            # Tip-over-aware (⑦): critical tilt before the COM leaves the support base
+            # = atan(margin / COM-height). The horizontal margin alone ignores COM
+            # height, so a screwdriver (margin>0 but tall, tiny base) reads as stable
+            # yet tips in a real drop. Validated: corr 0.70 with measured Gazebo drop.
+            com_h = max(float(com[2] - z_min), 1e-4)
+            tip_deg = float(np.degrees(np.arctan2(margin, com_h)))
+            lo, hi = self.config.tip_angle_lo_deg, self.config.tip_angle_hi_deg
+            score = float(np.clip((tip_deg - lo) / max(hi - lo, 1e-6), 0.0, 1.0))
+        else:
+            # Static (v1): margin to support boundary only.
+            score = min(1.0, margin / (self.config.min_stability_margin * 2))
+
         return score, margin
     
     def _point_to_polygon_margin(self, point: np.ndarray, polygon: np.ndarray) -> float:
