@@ -63,6 +63,15 @@ Numbers are only comparable within one configuration of
 | corrected re-run 2026-06-10 (`aggregated_corrected.json`) | single mesh | 0° | table top | wall clock |
 | 10,433-variant drop study | single mesh | 0° | table top | wall clock |
 | v2.9 re-run (`aggregated_v29.json`) | per-primitive | 5° | table top | **sim time** |
+| v2.9 10k study (`gazebo_stability_v29.json`) | per-primitive | 5° | table top | **sim time** |
+
+Note on the two 10k studies: the v2.9 study (10,494 objects, 76% stable) additionally uses
+the **tightened variant distribution** (recognizable ±12% variants, prototype-anchored) —
+archetype-level comparable to the meshcol study (85% stable), not per-object. The band
+structure sharpens under clean physics + explicit tilt: flat objects that mesh-contact
+noise used to topple now rest at 100% (frying_pan, spatula, teapot, tall_box), while
+rollers and thin rods are correctly punished to 0% (dumbbell, kettlebell, baseball_bat,
+screwdriver, chisel) — "rolls or tips" is no longer masked by tessellation artifacts.
 
 The settle column matters: the wall-clock `time.sleep` silently under-settles when the
 sim's real-time factor drops under machine load (objects get queried frozen mid-air at
