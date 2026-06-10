@@ -98,6 +98,16 @@ def main():
     ap.add_argument("--samples", type=int, default=40, help="CEM samples/iter when --train")
     ap.add_argument("--n-grasps", type=int, default=12)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--filter", action="store_true",
+                    help="drop variants that fail manipulation feasibility: longest "
+                         "extent > --max-extent, zero synthesized grasps, or mass < "
+                         "--min-mass. Without it, every variant is kept but annotated "
+                         "(feasible: true/false) — the audit measured ~15%% oversize "
+                         "and ~4%% zero-grasp variants without any gate.")
+    ap.add_argument("--max-extent", type=float, default=0.15,
+                    help="gripper workspace bound for --filter / annotation (m)")
+    ap.add_argument("--min-mass", type=float, default=0.005,
+                    help="minimum mass for --filter / annotation (kg)")
     ap.add_argument("--out", type=Path, default=ROOT / "output" / "arch_variants" / "manifest.json")
     ap.add_argument("--export-root", type=Path,
                     default=ROOT / "output" / "arch_variants" / "objects")
@@ -108,7 +118,7 @@ def main():
     names = [n for n in names if n in ARCHETYPE_REGISTRY]
 
     exporter = URDFExporter(ExportConfig(use_convex_hull=False, simplify_collision=False))
-    manifest, skipped = [], 0
+    manifest, skipped, infeasible = [], 0, 0
 
     for ai, name in enumerate(names):
         trainer = ArchetypeTrainer(ARCHETYPE_REGISTRY[name])
@@ -122,9 +132,17 @@ def main():
                 if not obj.is_connected():
                     skipped += 1
                     continue
-                manifest.append(_entry(obj, f"{name}_{k:04d}", name, exporter,
-                                       args.export_root, args.n_grasps,
-                                       args.seed + ai * 1000 + k))
+                e = _entry(obj, f"{name}_{k:04d}", name, exporter,
+                           args.export_root, args.n_grasps,
+                           args.seed + ai * 1000 + k)
+                # Manipulation feasibility (Panda parallel-jaw assumptions): fits the
+                # gripper workspace, has >=1 synthesized grasp, isn't vanishingly light.
+                ext_ok = bool(e["extents"]) and max(e["extents"]) <= args.max_extent
+                e["feasible"] = bool(ext_ok and e["grasps"] and e["mass"] >= args.min_mass)
+                if args.filter and not e["feasible"]:
+                    infeasible += 1
+                    continue
+                manifest.append(e)
                 made += 1
             except Exception:
                 skipped += 1
@@ -133,8 +151,10 @@ def main():
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w") as f:
         json.dump(manifest, f, indent=2)
-    print(f"Wrote {len(manifest)} entries ({len(names)} archetypes, {skipped} skipped) "
-          f"to {args.out}")
+    n_inf = sum(1 for e in manifest if not e.get("feasible", True))
+    print(f"Wrote {len(manifest)} entries ({len(names)} archetypes, {skipped} skipped"
+          + (f", {infeasible} filtered as infeasible" if args.filter else
+             f", {n_inf} annotated infeasible") + f") to {args.out}")
 
 
 if __name__ == "__main__":

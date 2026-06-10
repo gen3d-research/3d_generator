@@ -107,16 +107,24 @@ class URDFExporter:
         collision_mesh = self._prepare_collision_mesh(visual_mesh)
         
         # Compute physical properties
+        inertia_method = "analytic_sum"
         if self.config.use_mesh_inertia:
             try:
                 mass, inertia, com = obj.mesh_mass_properties(self.config.density)
+                inertia_method = "union_mesh"
             except Exception:
-                # Union not watertight — fall back to the analytic path.
+                # Union not watertight — fall back to the analytic path. WARNING:
+                # combined_inertia SUMS per-primitive volumes, double-counting any
+                # overlap (up to ~15% mass error on heavily-overlapped composites).
+                print(f"warning: {name}: boolean union failed — inertia falls back "
+                      f"to the analytic overlap-summing path (mass may be "
+                      f"over-estimated); recorded in metadata as 'analytic_sum'.")
                 mass, inertia = obj.combined_inertia(self.config.density)
                 com = obj.center_of_mass(self.config.density)
         else:
             mass, inertia = obj.combined_inertia(self.config.density)
             com = obj.center_of_mass(self.config.density)
+        self._last_inertia_method = inertia_method
         
         # Save meshes
         ext = self.config.mesh_format
@@ -403,7 +411,10 @@ class URDFExporter:
                 'mass_kg': float(mass),
                 'center_of_mass': com.tolist(),
                 'inertia_tensor': inertia.tolist(),
-                'density_kg_m3': self.config.density
+                'density_kg_m3': self.config.density,
+                # 'union_mesh' = overlap-aware (correct); 'analytic_sum' = per-primitive
+                # sum that double-counts overlaps (fallback when the union fails).
+                'inertia_method': getattr(self, '_last_inertia_method', 'analytic_sum'),
             },
             'geometry': {
                 'aabb_extents': extents.tolist(),
