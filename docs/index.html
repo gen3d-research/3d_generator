@@ -12,7 +12,7 @@
   <!-- Open Graph -->
   <meta property="og:title" content="Generative 3D Object Modeling for Robust Robot Manipulation in ROS 2">
   <meta property="og:description"
-    content="ICARM 2026. Dataset-free, CPU-only generator of manipulation-ready 3D objects; 97.7% force-closure grasp, 100% MoveIt 2 plan, 98.7% Gazebo stability over three seeds.">
+    content="ICARM 2026. Dataset-free, CPU-only generator of manipulation-ready 3D objects; 97.7% force-closure grasp, 98.7% MoveIt 2 plan, 92.0% Gazebo stability over three seeds (post-submission corrected stability metric).">
   <meta property="og:type" content="website">
   <meta property="og:image" content="./static/images/system_pipeline.png">
   <meta name="twitter:card" content="summary_large_image">
@@ -177,16 +177,16 @@
             <div class="stat-card blue"><div class="stat-number">97.7%</div><div class="stat-label">Force-closure grasp</div></div>
           </div>
           <div class="column is-3">
-            <div class="stat-card green"><div class="stat-number">100%</div><div class="stat-label">MoveIt 2 motion plan</div></div>
+            <div class="stat-card green"><div class="stat-number">98.7%</div><div class="stat-label">MoveIt 2 motion plan</div></div>
           </div>
           <div class="column is-3">
-            <div class="stat-card orange"><div class="stat-number">98.7%</div><div class="stat-label">Gazebo dynamic stability</div></div>
+            <div class="stat-card orange"><div class="stat-number">92.0%</div><div class="stat-label">Gazebo dynamic stability</div></div>
           </div>
           <div class="column is-3">
             <div class="stat-card teal"><div class="stat-number">200k</div><div class="stat-label">Generated objects</div></div>
           </div>
           <div class="column is-3">
-            <div class="stat-card pink"><div class="stat-number">20</div><div class="stat-label">Archetypes</div></div>
+            <div class="stat-card pink"><div class="stat-number">105</div><div class="stat-label">Archetypes</div></div>
           </div>
           <div class="column is-3">
             <div class="stat-card grey"><div class="stat-number">5</div><div class="stat-label">Methods compared</div></div>
@@ -197,6 +197,17 @@
           <div class="column is-3">
             <div class="stat-card green"><div class="stat-number">CPU</div><div class="stat-label">No GPU / no dataset</div></div>
           </div>
+        </div>
+        <div class="rq-box" style="margin-top:1rem;">
+          <strong>Results updated post-submission (June 2026).</strong> We found and fixed a
+          measurement bug in the Gazebo stability metric (vertical drift was referenced to the
+          elevated spawn point instead of the resting height) and re-ran the full three-seed
+          evaluation on the current 19-primitive system: <strong>97.7%</strong> grasp /
+          <strong>98.7%</strong> MoveIt&nbsp;2 plan / <strong>92.0%</strong> Gazebo stability for CEM
+          &mdash; the method ranking is unchanged, and reproduces under an upgraded contact-physics
+          configuration as well. The as-submitted numbers (97.7 / 100 / 98.7) remain in the paper.
+          Configuration matrix:
+          <a href="https://github.com/gen3d-research/3d_generator/blob/main/docs/SIM_NOTES.md"><code>docs/SIM_NOTES.md</code></a>.
         </div>
       </div>
     </div>
@@ -235,7 +246,7 @@
               Averaged over three seeds, our generator reaches 97.7%, 100%, and 98.7% respectively,
               dominating CMA-ES, a genetic algorithm, random search, and a fixed CAD library on two of
               the three metrics outright while preserving competitive shape diversity across 200,000
-              generated objects in 20 archetypes.
+              generated objects in 20 archetypes. <em>(As-submitted abstract; see the update note above for the post-submission corrected stability metric.)</em>
             </p>
           </div>
         </div>
@@ -551,10 +562,10 @@
       <div class="content has-text-justified">
         <ul>
           <li><strong>Optimising a suitability function is necessary but not sufficient.</strong> Every search algorithm we tried saturated the suitability score within a few iterations &mdash; CEM, CMA-ES, GA, random search, fixed CAD all reach mean&nbsp;&ge;&nbsp;0.98. The discriminating signal lives in <em>independent</em> downstream metrics computed by code paths disjoint from the training objective.</li>
-          <li><strong>CEM dominates two metrics, ties on the third.</strong> 97.7% force-closure grasp success (vs. 51&ndash;79% for non-CEM baselines), 100% MoveIt&nbsp;2 motion-planning success (vs. 63&ndash;89%), and 98.7% Gazebo stability (vs. 89&ndash;100%). CEM is the only method above 90% on every column simultaneously.</li>
+          <li><strong>CEM is the only consistent all-rounder</strong> (corrected metric, 3 seeds): 97.7% force-closure grasp (best of the optimizers; the fixed-CAD library&rsquo;s 99.0% reflects hand-designed graspability), 98.7% MoveIt&nbsp;2 planning success (tied-best), 92.0% Gazebo stability (within 3.8 points of best). No baseline holds up on all three: fixed CAD and random search collapse on stability (51.7&plusmn;28.2% / 50.4&plusmn;35.8%), and the stability leaders trail 6+ points on grasp synthesis.</li>
           <li><strong>Population searches over-optimise to stable monoliths.</strong> CMA-ES and GA converge on box-like shapes that drop and stay put trivially, but those same shapes admit fewer force-closure grasps and yield fewer reachable pre-grasp poses.</li>
-          <li><strong>Fixed CAD pays a stability variance penalty.</strong> Hand-designed semantic archetypes (frying pan, spatula, V-shape) tip when dropped, giving the largest dynamic-stability variance in the comparison (&plusmn;15.1%).</li>
-          <li><strong>Diversity is preserved, not collapsed.</strong> CEM's feature diversity (3.48&nbsp;&plusmn;&nbsp;0.24) tracks the Fixed&nbsp;CAD upper bound (4.01) closely while population searches compress into a narrow mode (&asymp;3.28).</li>
+          <li><strong>Fixed CAD pays a stability penalty.</strong> With the expanded 105-archetype library and the corrected metric, hand-designed archetypes (screwdrivers, chisels, funnels, spatulas) genuinely tip when dropped: 51.7&plusmn;28.2% &mdash; by far the largest variance in the comparison.</li>
+          <li><strong>Diversity is preserved, not collapsed.</strong> With the 19-primitive library, CEM's feature diversity (4.22&nbsp;&plusmn;&nbsp;0.03) now <em>exceeds</em> the Fixed&nbsp;CAD reference (4.14) while population searches compress into a narrow mode (&asymp;3.27).</li>
         </ul>
       </div>
     </div>
