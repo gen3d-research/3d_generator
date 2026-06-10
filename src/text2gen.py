@@ -60,10 +60,15 @@ def parse_prompt(prompt: str) -> dict:
 def text_to_generator(prompt: str, **cfg_overrides):
     """Build a (RoboticObjectGenerator, intent) configured from `prompt`."""
     it = parse_prompt(prompt)
+    # Pop the gate override FIRST so it can't reach GeneratorConfig twice (a caller
+    # passing low_grasp_gate= while the prompt says "graspable" raised TypeError).
+    low_grasp = cfg_overrides.pop("low_grasp_gate", True)
+    if it["graspable"]:
+        low_grasp = True              # the prompt's explicit ask wins
     cfg = GeneratorConfig(
         dynamic_stability_gate=it["stable"],
         repair_stability=it["stable"],
-        low_grasp_gate=True if it["graspable"] else cfg_overrides.pop("low_grasp_gate", True),
+        low_grasp_gate=low_grasp,
         target_extent=it["target_extent"],
         **cfg_overrides,
     )

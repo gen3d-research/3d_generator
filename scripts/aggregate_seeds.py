@@ -229,6 +229,10 @@ def main():
     # additive: paired significance of CEM vs best alternative
     if significance:
         print("\n## CEM vs best alternative — paired test (independent metrics only)\n")
+        if len(args.seeds) < 10:
+            print(f"> **WARNING: n={len(args.seeds)} seeds — these tests are UNDERPOWERED.**\n"
+                  f"> At n=3 a paired Wilcoxon cannot reach p<0.05; treat p-values as\n"
+                  f"> direction-of-effect only, never as significance claims in a manuscript.\n")
         print("| Metric | vs | test | p-value | n | note |")
         print("|---|---|---|---|---|---|")
         for metric, info in significance.items():

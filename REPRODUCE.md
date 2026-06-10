@@ -43,7 +43,7 @@ cd ..
 For each method (CEM, CMA-ES, GA, random search, fixed CAD), this trains under a
 1500-evaluation budget, exports the top-K objects to URDF + SDF + meshes under
 `output/seed_42/manifest_objects/`, and synthesises grasp candidates for each.
-The SDF collision geometry is then rewritten to the visual mesh's AABB.
+The SDF collision geometry is the exact visual mesh; `patch_sdf_collision.py` then stiffens the contact and raises friction so finger grasps hold (it does NOT simplify to an AABB).
 
 ```bash
 python3 scripts/build_eval_manifest.py \
@@ -177,4 +177,4 @@ of:
   `home_joint_state_publisher` + SRDF `set_start_state("ready")` to avoid
   this; if those got bypassed, restore them.
 - **Mesh normals missing** in the exported collision OBJ. Run
-  `patch_sdf_collision.py` to rewrite collisions as AABB primitives.
+  `patch_sdf_collision.py` to re-apply the contact/friction patch (collisions stay exact meshes).

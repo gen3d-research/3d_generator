@@ -406,6 +406,9 @@ class ParameterDistribution:
             'friction_std': float(self.friction_std),
             'structured_placement': bool(self.structured_placement),
             'attach_overlap': float(self.attach_overlap),
+            # ⑨: persist the palette constraint, or a constrained generator silently
+            # samples ALL types after save/load.
+            'type_mask': self.type_mask.tolist() if self.type_mask is not None else None,
         }
 
     @classmethod
@@ -427,6 +430,8 @@ class ParameterDistribution:
         obj.friction_std = float(d.get('friction_std', obj.friction_std))
         obj.structured_placement = bool(d.get('structured_placement', obj.structured_placement))
         obj.attach_overlap = float(d.get('attach_overlap', obj.attach_overlap))
+        if d.get('type_mask') is not None and len(d['type_mask']) == len(PRIMITIVE_SPECS):
+            obj.type_mask = np.array(d['type_mask'], dtype=float)
         return obj
 
 

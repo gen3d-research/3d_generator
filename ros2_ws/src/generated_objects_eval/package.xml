@@ -31,6 +31,8 @@
   <depend>parallel_gripper_controller</depend>
   <depend>control_msgs</depend>
   <depend>tf2_ros</depend>
+  <!-- python deps used by the eval nodes (mesh loading in planning scene / demo) -->
+  <exec_depend>python3-trimesh</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

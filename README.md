@@ -202,32 +202,33 @@ in [`docs/PRIMITIVES.md`](docs/PRIMITIVES.md).**
 ```
 3d_generator/
 ├── src/                      # Core Python sources
-│   ├── primitives.py            geometric primitives (Box, Cylinder, ...)
-│   ├── scoring.py               constraint-based scoring functions
-│   ├── cem.py                   Cross-Entropy Method optimizer
+│   ├── primitives.py            geometric primitives (19 types) + CompositeObject
+│   ├── archetypes.py            105 hand-written archetype factories (registry)
+│   ├── scoring.py               constraint-based scoring (+ graspability/stability gates)
+│   ├── cem.py                   Cross-Entropy Method optimizer (+ type masks, seeding)
+│   ├── stability_repair.py      re-orient objects onto their stable resting pose
+│   ├── pareto.py                non-dominated (Pareto) selection over objectives
+│   ├── text2gen.py              text-conditioned front-end (prompt -> generator config)
 │   ├── export.py                URDF/SDF exporter
-│   ├── generator.py             top-level generator class
+│   ├── generator.py             top-level generator facade
 │   ├── baselines.py             CMA-ES / GA / Random / Fixed-CAD baselines
 │   ├── grasp_planner.py         force-closure grasp synthesiser
 │   ├── diversity.py             diversity proxies
 │   ├── archetype_cem.py         per-archetype CEM track
 │   └── main.py                  CLI entry point
-├── scripts/                  # Reproduction + analysis scripts
-│   ├── build_eval_manifest.py
-│   ├── run_unified_eval.py
-│   ├── run_multi_seed.sh
-│   ├── aggregate_seeds.py
-│   ├── patch_sdf_collision.py
-│   ├── emit_latex_table.py
-│   ├── make_clean_diff.py
-│   └── archetype_tour.py
+├── scripts/                  # Reproduction + analysis scripts (selection)
+│   ├── build_eval_manifest.py      5-method eval manifest (objects + grasps)
+│   ├── build_archetype_manifest.py N variants per archetype -> ROS 2 manifest
+│   ├── run_unified_eval.py / run_multi_seed.sh / aggregate_seeds.py
+│   ├── run_drop_test_chunked.sh    crash-resilient Gazebo drop test at scale
+│   ├── patch_sdf_collision.py      contact/friction patch for finger grasps
+│   ├── gen_strategies.py           constrained generation sweeps (galleries)
+│   ├── render_*.py                 primitive/archetype/variant galleries
+│   └── archetype_tour.py / emit_latex_table.py / make_clean_diff.py
 ├── ros2_ws/src/generated_objects_eval/   # ROS 2 evaluation package
-├── docs/                                 # Project page (GitHub Pages)
-├── papers/conferences/ICARM/...          # Manuscript (new.tex, diff_new.tex, refs)
-├── README.md
-├── REPRODUCE.md
-├── DEMO.md
-├── CHANGELOG.md
+├── docs/                                 # Project page + PRIMITIVES/ROADMAP/GENERATION_PATHS
+├── GUIDE.md                              # generate -> visualize -> drop/pick walkthrough
+├── README.md / REPRODUCE.md / DEMO.md
 ├── requirements.txt
 └── reproduce_paper.sh
 ```

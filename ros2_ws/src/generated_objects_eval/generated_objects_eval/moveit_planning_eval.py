@@ -219,7 +219,12 @@ def run(manifest_path: Path, out_path: Path, config: dict, max_objects: int = 0)
         evaluator.clear_scene(entry["name"])
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps({"results": results, "config": config}, indent=2))
+    # Atomic write: the harness polls for this file and then HARD-KILLS the launch
+    # (moveit_py 2.12 segfaults on shutdown), so a plain write_text can be observed
+    # half-written (we have a moveit_results.json.race-corrupted to prove it).
+    tmp_path = out_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps({"results": results, "config": config}, indent=2))
+    tmp_path.replace(out_path)
     LOGGER.info(f"Wrote {len(results)} results to {out_path}")
 
     summary: dict = {}

@@ -28,6 +28,10 @@ import re
 from pathlib import Path
 
 
+# SIM SHORTCUT, not a material property: real surface friction is mu ~0.5-1.5
+# (rubber on plastic). mu=30 exists so the effort-controlled finger squeeze holds
+# objects under gravity in gz without a weld. If objects slip in sim, suspect this
+# (and contact stiffness below) before blaming the grasp itself.
 _FRICTION_MU = 30.0
 
 # Stiff, damped contact so the fingers PRESS on the mesh instead of sinking into
@@ -71,13 +75,18 @@ def main():
     args = p.parse_args()
 
     manifest = json.loads(args.manifest.read_text())
-    n_patched = 0
+    n_patched, n_missing = 0, 0
     for e in manifest:
+        # visual_mesh is unused by patch_sdf — don't require (or crash on) the key.
         sdf = Path(e["sdf"])
-        vis = Path(e["visual_mesh"])
-        if patch_sdf(sdf, vis):
+        if not sdf.exists():
+            print(f"warning: SDF not found, skipping: {sdf}")
+            n_missing += 1
+            continue
+        if patch_sdf(sdf):
             n_patched += 1
-    print(f"patched {n_patched}/{len(manifest)} SDFs")
+    print(f"patched {n_patched}/{len(manifest)} SDFs"
+          + (f" ({n_missing} missing)" if n_missing else ""))
 
 
 if __name__ == "__main__":

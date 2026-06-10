@@ -251,6 +251,22 @@ def test_text_prompt_parsing():
     assert it2["target_extent"] == 0.08 and it2["palette"] and "box" in it2["palette"]
 
 
+def test_text2gen_no_duplicate_kwarg():
+    from text2gen import text_to_generator
+    # Passing low_grasp_gate while the prompt says "graspable" used to raise
+    # TypeError (duplicate keyword argument).
+    g, it = text_to_generator("a graspable cup", low_grasp_gate=False, seed=1)
+    assert it["graspable"] and g.config.low_grasp_gate  # prompt's explicit ask wins
+
+
+def test_type_mask_serialization_roundtrip():
+    d = ParameterDistribution(max_primitives=6)
+    mask = np.zeros(len(PRIMITIVE_SPECS)); mask[:3] = 1.0
+    d.type_mask = mask
+    d2 = ParameterDistribution.from_dict(d.to_dict())
+    assert d2.type_mask is not None and np.allclose(d2.type_mask, mask)
+
+
 # --- paper-repro preset -----------------------------------------------------
 
 def test_paper_repro_restricts_space():

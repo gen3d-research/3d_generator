@@ -207,7 +207,7 @@ rebuild with `colcon build --packages-select generated_objects_eval`.
 ### Stale `gz sim` instances
 
 ```bash
-pkill -KILL -f "gz sim"
+pkill -KILL -f "gz sim -s -r"   # precise pattern - the broad "gz sim" can match unrelated processes
 pkill -KILL -f "gazebo_stability_eval"
 pkill -KILL -f "moveit_planning_eval"
 ```

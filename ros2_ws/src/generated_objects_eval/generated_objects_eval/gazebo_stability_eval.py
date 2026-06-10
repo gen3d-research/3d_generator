@@ -221,7 +221,10 @@ def main():
             break
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps({"results": results, "config": cfg}, indent=2))
+    # Atomic write (tmp + rename) so external watchers never see a partial file.
+    tmp = args.out.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"results": results, "config": cfg}, indent=2))
+    tmp.replace(args.out)
 
     summary: dict = {}
     for r in results:
