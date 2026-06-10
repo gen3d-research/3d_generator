@@ -52,6 +52,28 @@ Consequences to be aware of:
 - Restitution 0.1; object friction values sampled at export (`μ ~ N(0.8, 0.2)` clipped
   to [0.1, 2.0]) are *overwritten* by the patch for the grasp evaluations.
 
+## MoveIt 2 planning metric (kinematic vs collision-aware)
+
+As submitted, the planning metric was **kinematic-only** (a `moveit_py` 2.12 binding
+segfault kept collision objects out of the scene) and was claimed as a tight upper
+bound. Post-submission the eval gained **collision-aware** planning (table + each
+object's true mesh, published as latched `/planning_scene` diffs — the demo driver's
+proven workaround). Two findings:
+
+1. Turning collision checking on exposed **two latent goal-geometry bugs** that
+   kinematic-only planning silently accepted: goals placed the wrist flange where the
+   fingertips should be (missing the 0.1034 m TCP offset), and the hand faced 180°
+   away from the object (`z = −approach`). Both fixed; both modes re-measured on
+   identical corrected goals (`moveit_results_kin2.json` / `moveit_results_collision.json`).
+2. The bound is **not tight**: 3-seed plan-any drops 13–24 points with collisions on
+   (table-adjacent side grasps dominate the losses). CEM both leads the
+   collision-aware rate (82.7 ± 13.2%) and has the smallest kinematic→collision gap
+   (13.3) — its objects' grasps survive realistic planning best.
+
+`kinematic_only:=true` (launch) / `--kinematic-only` (CLI) reproduces the as-submitted
+metric. Note the corrected goal geometry slightly changes even the kinematic column
+(96.0% vs the as-submitted-geometry 97.3% for CEM).
+
 ## Comparability of result sets
 
 Numbers are only comparable within one configuration of
