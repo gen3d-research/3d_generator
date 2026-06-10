@@ -36,6 +36,9 @@ class ScoringConfig:
     # Size constraints (meters)
     min_extent: float = 0.02      # Minimum dimension
     max_extent: float = 0.15      # Maximum dimension
+    # Point ⑪: if set, the size score peaks at this target overall size (longest
+    # extent, m) instead of being flat across [min,max] — for targeted generation.
+    target_extent: Optional[float] = None
     
     # Gripper constraints
     gripper_width_min: float = 0.01   # Minimum grasp width
@@ -228,7 +231,14 @@ class ObjectScorer:
         - Not too large (exceeds gripper/workspace)
         """
         extents = obj.aabb_extents()
-        
+
+        # Point ⑪ — targeted size: reward proximity of the longest extent to the target.
+        if self.config.target_extent is not None:
+            size = float(np.max(extents))
+            t = float(self.config.target_extent)
+            s = float(np.exp(-((size - t) / (0.4 * t + 1e-6)) ** 2))
+            return s, extents
+
         # Check each dimension
         scores = []
         for ext in extents:

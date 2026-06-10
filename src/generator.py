@@ -60,6 +60,8 @@ class GeneratorConfig:
     # (a guarantee it settles upright), for objects below repair_min_tip_deg.
     repair_stability: bool = False
     repair_min_tip_deg: float = 20.0
+    # Point ⑪: bias generation toward a target overall size (longest extent, m).
+    target_extent: Optional[float] = None
 
     # Export settings
     density: float = 1000.0
@@ -115,6 +117,7 @@ class RoboticObjectGenerator:
             low_grasp_gate=self.config.low_grasp_gate,
             dynamic_stability=self.config.dynamic_stability,
             dynamic_stability_gate=self.config.dynamic_stability_gate,
+            target_extent=self.config.target_extent,
         )
         self.scorer = ObjectScorer(self.scoring_config)
         
@@ -146,6 +149,12 @@ class RoboticObjectGenerator:
                 mask[keyidx[k]] = 1.0
         self.distribution.type_mask = mask
         self.distribution.primitive_type_probs = mask / mask.sum()
+        return self
+
+    def target_size(self, extent_m: float):
+        """Point ⑪: bias generation toward objects whose longest extent is ~extent_m."""
+        self.config.target_extent = extent_m
+        self.scoring_config.target_extent = extent_m   # scorer shares this config object
         return self
 
     def train(self,

@@ -231,6 +231,26 @@ def test_pareto_front_is_nondominated():
     assert "d" not in front and "a" in front and "b" in front
 
 
+def test_target_extent_size_peaks():
+    from archetypes import ARCHETYPE_REGISTRY
+    sc = ObjectScorer(ScoringConfig(target_extent=0.05))
+    small = ARCHETYPE_REGISTRY["nut"]()       # ~3.6 cm, near the 5 cm target
+    big = ARCHETYPE_REGISTRY["tablet"]()      # ~12 cm, far from target
+    assert sc.score(small).size_score > sc.score(big).size_score
+    assert sc.score(big).size_score < 0.1
+
+
+def test_text_prompt_parsing():
+    from text2gen import parse_prompt
+    it = parse_prompt("a small stable graspable curved bottle")
+    assert it["seed"] == "bottle"
+    assert it["stable"] and it["graspable"]
+    assert it["target_extent"] == 0.04
+    assert "sphere" in it["palette"]          # curved palette
+    it2 = parse_prompt("an 8cm faceted block")
+    assert it2["target_extent"] == 0.08 and it2["palette"] and "box" in it2["palette"]
+
+
 # --- paper-repro preset -----------------------------------------------------
 
 def test_paper_repro_restricts_space():
