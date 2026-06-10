@@ -186,6 +186,18 @@ def test_dynamic_stability_gate_rejects_tippy():
     assert gate.score(mug).total_score == pytest.approx(base.score(mug).total_score, abs=0.02)
 
 
+def test_stability_repair_reorients_tippy():
+    from stability_repair import repair_stability, tip_angle
+    from archetypes import ARCHETYPE_REGISTRY
+    screw = ARCHETYPE_REGISTRY["screwdriver"]()
+    t0 = tip_angle(screw)
+    repair_stability(screw, min_tip_deg=20.0)
+    t1 = tip_angle(screw)
+    assert t0 < 20.0              # the screwdriver starts tippy
+    assert t1 > t0 + 5.0         # repair re-orients it to a more-stable rest
+    assert screw.is_connected()  # repair preserves connectivity
+
+
 # --- paper-repro preset -----------------------------------------------------
 
 def test_paper_repro_restricts_space():

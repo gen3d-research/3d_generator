@@ -56,6 +56,10 @@ class GeneratorConfig:
     # ⑦ as a HARD gate: multiply the total by the tip-over stability (floored), so the
     # CEM actually suppresses the tippy tail instead of diluting it as a soft term.
     dynamic_stability_gate: bool = False
+    # Point ⑥: post-hoc re-orient each generated object onto its most-stable resting pose
+    # (a guarantee it settles upright), for objects below repair_min_tip_deg.
+    repair_stability: bool = False
+    repair_min_tip_deg: float = 20.0
 
     # Export settings
     density: float = 1000.0
@@ -222,7 +226,14 @@ class RoboticObjectGenerator:
             objects = sorted(objects, key=_grasp_key, reverse=True)[:n]
             for i, o in enumerate(objects):
                 o.name = f"generated_{i:04d}"
-        
+
+        # Point ⑥: project each object onto its most-stable resting pose, so it settles
+        # upright on the table by construction (a guarantee, not just an optimized proxy).
+        if self.config.repair_stability:
+            from stability_repair import repair_stability
+            for o in objects:
+                repair_stability(o, min_tip_deg=self.config.repair_min_tip_deg)
+
         return objects
 
     def sample_with_verdicts(self, n: int = 12):
