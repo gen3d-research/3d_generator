@@ -259,6 +259,37 @@ def test_text2gen_no_duplicate_kwarg():
     assert it["graspable"] and g.config.low_grasp_gate  # prompt's explicit ask wins
 
 
+def test_seed_concentration_survives_cem_update():
+    """The 0.18 diversity cap used to crush a seeded type prior on the FIRST CEM
+    update; seed_from_object now raises the distribution's own cap to the seeded
+    concentration so the warm start survives training."""
+    from cem import _SPEC_INDEX
+    from archetypes import ARCHETYPE_REGISTRY
+    g = generator.RoboticObjectGenerator(
+        generator.GeneratorConfig(seed=2, max_primitives=4, cem_iterations=3, cem_samples=20))
+    g.seed_from("nut", concentration=0.8)
+    assert g.distribution.max_type_prob is not None and g.distribution.max_type_prob > 0.18
+    nut = ARCHETYPE_REGISTRY["nut"]()
+    idx = [_SPEC_INDEX[p.ptype] for p in nut.primitives]
+    g.train(verbose=False)
+    assert g.distribution.primitive_type_probs[idx].sum() > 0.3
+
+
+def test_constrain_types_preserves_seeded_bias():
+    """constrain_types used to reset to uniform-over-mask, erasing a prior seed."""
+    from cem import _SPEC_INDEX, PRIMITIVE_SPECS
+    from archetypes import ARCHETYPE_REGISTRY
+    g = generator.RoboticObjectGenerator(
+        generator.GeneratorConfig(seed=3, max_primitives=4, cem_iterations=2, cem_samples=10))
+    g.seed_from("nut", concentration=0.8)            # hex_prism + torus heavy
+    g.constrain_types(["hex_prism", "torus", "box", "cylinder"])
+    probs = g.distribution.primitive_type_probs
+    keyidx = {s.key: i for i, s in enumerate(PRIMITIVE_SPECS)}
+    # the seeded types still dominate inside the mask (not flattened to 0.25 each)
+    assert probs[keyidx["hex_prism"]] + probs[keyidx["torus"]] > 0.6
+    assert probs.sum() == pytest.approx(1.0)
+
+
 def test_per_primitive_collision_export(tmp_path):
     """v2.9: the exporter emits one collision per primitive — native shapes for
     box/cylinder/sphere (capsule = cylinder + 2 spheres), convex-hull mesh pieces

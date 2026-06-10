@@ -13,10 +13,7 @@ import numpy as np
 from generator import RoboticObjectGenerator, GeneratorConfig
 from archetypes import ARCHETYPE_REGISTRY
 
-CURVED = ["cylinder", "sphere", "capsule", "cone", "torus", "ellipsoid",
-          "hollow_shell", "handle", "frustum", "hemisphere"]
-FACETED = ["box", "pyramid", "wedge", "hex_prism", "ngon_prism",
-           "rounded_box", "gear_prism", "extruded_profile"]
+from cem import CURVED_TYPES as CURVED, FACETED_TYPES as FACETED
 _SIZE_WORDS = {"tiny": 0.03, "small": 0.04, "medium": 0.07,
                "large": 0.11, "big": 0.11, "huge": 0.14}
 

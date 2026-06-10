@@ -172,6 +172,16 @@ PRIMITIVE_SPECS: List[PrimitiveSpec] = [
 # Default type bias: favor box/cylinder slightly, rest uniform.
 _SPEC_INDEX = {s.ptype: i for i, s in enumerate(PRIMITIVE_SPECS)}
 
+# Surface-character categories — the single source of truth for palette constraints
+# (gen_strategies, text2gen, ...). The assert forces every new primitive type to be
+# categorized here; the previously-duplicated per-script lists had already drifted.
+CURVED_TYPES = ["cylinder", "sphere", "capsule", "cone", "torus", "ellipsoid",
+                "hollow_shell", "handle", "frustum", "hemisphere", "open_tube"]
+FACETED_TYPES = ["box", "pyramid", "wedge", "hex_prism", "ngon_prism",
+                 "rounded_box", "gear_prism", "extruded_profile"]
+assert set(CURVED_TYPES) | set(FACETED_TYPES) == {s.key for s in PRIMITIVE_SPECS}, \
+    "every primitive type must be categorized as curved or faceted"
+
 # Initial per-type sampling weights (robust to spec ordering). Boxes/cylinders are
 # the bread-and-butter building blocks; the handle/torus are ACCESSORY shapes that
 # read as standalone objects poorly (a lone C-arc), so they start rare. The CEM
@@ -263,6 +273,10 @@ class ParameterDistribution:
     # (the epsilon-smoothing otherwise re-introduces them), so a palette-constrained
     # generator can be TRAINED, not just sampled.
     type_mask: Optional[np.ndarray] = None
+    # Per-distribution override of the diversity cap (None -> _MAX_TYPE_PROB).
+    # seed_from_object raises it to the seeded concentration so the very first CEM
+    # update doesn't crush a 0.75 seed prior down to the default 0.18 cap.
+    max_type_prob: Optional[float] = None
 
     def __post_init__(self):
         if self.n_primitives_probs is None:
@@ -373,6 +387,10 @@ class ParameterDistribution:
             if i is not None:
                 probs[i] += c * k / max(len(prims), 1)
         self.primitive_type_probs = probs / probs.sum()
+        # Let the CEM update keep the seeded concentration: without this, the very
+        # first _update_distribution caps the dominant seeded type at 0.18 and the
+        # warm start is destroyed after one iteration.
+        self.max_type_prob = float(max(self.primitive_type_probs.max(), _MAX_TYPE_PROB))
 
         # Count prior: favour the seed's number of parts.
         n = int(np.clip(len(prims), 1, self.max_primitives))
@@ -409,6 +427,7 @@ class ParameterDistribution:
             # ⑨: persist the palette constraint, or a constrained generator silently
             # samples ALL types after save/load.
             'type_mask': self.type_mask.tolist() if self.type_mask is not None else None,
+            'max_type_prob': self.max_type_prob,
         }
 
     @classmethod
@@ -432,6 +451,8 @@ class ParameterDistribution:
         obj.attach_overlap = float(d.get('attach_overlap', obj.attach_overlap))
         if d.get('type_mask') is not None and len(d['type_mask']) == len(PRIMITIVE_SPECS):
             obj.type_mask = np.array(d['type_mask'], dtype=float)
+        if d.get('max_type_prob') is not None:
+            obj.max_type_prob = float(d['max_type_prob'])
         return obj
 
 
@@ -576,8 +597,9 @@ class CEMOptimizer:
         if ptype_counts.sum() > 0:
             new_probs = ptype_counts / ptype_counts.sum()
             new_probs = (new_probs + 0.01) / (new_probs + 0.01).sum()
+            cap = dist.max_type_prob if dist.max_type_prob is not None else _MAX_TYPE_PROB
             dist.primitive_type_probs = _cap_type_probs(
-                lr * new_probs + (1 - lr) * dist.primitive_type_probs)
+                lr * new_probs + (1 - lr) * dist.primitive_type_probs, cap=cap)
             # ⑨: re-impose the palette constraint the epsilon-smoothing just leaked.
             if dist.type_mask is not None:
                 masked = dist.primitive_type_probs * dist.type_mask

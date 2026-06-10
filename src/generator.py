@@ -148,7 +148,14 @@ class RoboticObjectGenerator:
             if k in keyidx:
                 mask[keyidx[k]] = 1.0
         self.distribution.type_mask = mask
-        self.distribution.primitive_type_probs = mask / mask.sum()
+        # Mask-and-renormalize the EXISTING probs so seeded/learned priors survive
+        # (the old uniform reset silently erased a prior seed_from()/train()); fall
+        # back to uniform-over-mask only if no prior mass survives the mask.
+        masked = np.asarray(self.distribution.primitive_type_probs, float) * mask
+        if masked.sum() > 1e-12:
+            self.distribution.primitive_type_probs = masked / masked.sum()
+        else:
+            self.distribution.primitive_type_probs = mask / mask.sum()
         return self
 
     def target_size(self, extent_m: float):

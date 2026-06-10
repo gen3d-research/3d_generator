@@ -38,9 +38,11 @@ def _margin_in_poly(pt: np.ndarray, poly: np.ndarray) -> float:
     return d if inside else -d
 
 
-def tip_angle(obj) -> float:
-    """Critical tip-over angle (deg) of the object's *current* pose; 0 if unstable."""
-    mesh = obj.to_mesh(boolean_union=True)
+def tip_angle(obj, mesh=None) -> float:
+    """Critical tip-over angle (deg) of the object's *current* pose; 0 if unstable.
+    Pass a precomputed union mesh to avoid the (expensive) CSG rebuild."""
+    if mesh is None:
+        mesh = obj.to_mesh(boolean_union=True)
     v = np.asarray(mesh.vertices, float)
     zmin = v[:, 2].min()
     band = zmin + max(0.002, 0.03 * (v[:, 2].max() - zmin))
@@ -58,13 +60,13 @@ def tip_angle(obj) -> float:
     return float(np.degrees(np.arctan2(m, max(com[2] - zmin, 1e-4))))
 
 
-def best_stable_pose(obj):
-    """Return (tip_angle_deg, R) for the most-stable resting orientation, or None.
-
-    Each convex-hull facet is a candidate resting face; rotating its normal to point down
-    lays the object on that face. The rest is stable iff the COM projects inside the
-    contact polygon, and we rank stable rests by tip-over margin."""
-    mesh = obj.to_mesh(boolean_union=True)
+def best_stable_pose(obj, mesh=None):
+    """Return (tip_angle_deg, R, rest_zmin_rel_com) for the most-stable resting
+    orientation, or None. Each convex-hull facet is a candidate resting face; rotating
+    its normal to point down lays the object on that face. The rest is stable iff the
+    COM projects inside the contact polygon; stable rests rank by tip-over margin."""
+    if mesh is None:
+        mesh = obj.to_mesh(boolean_union=True)
     com = np.asarray(obj.center_of_mass(1000.0), float)
     try:
         hull = mesh.convex_hull
@@ -91,28 +93,35 @@ def best_stable_pose(obj):
             continue
         tip = float(np.degrees(np.arctan2(m, max(-zmin, 1e-4))))
         if best is None or tip > best[0]:
-            best = (tip, R)
+            best = (tip, R, float(zmin))
     return best
 
 
 def repair_stability(obj, min_tip_deg: float = 20.0):
     """Re-orient `obj` onto its most-stable resting pose if its current pose is tippier
     than `min_tip_deg`. Mutates + returns the object. No-op if already stable enough or
-    no stable pose is found."""
-    if tip_angle(obj) >= min_tip_deg:
+    no stable pose is found.
+
+    Builds the (expensive) CSG union mesh exactly ONCE: the current tip angle, the
+    candidate rests, and the re-seat offset all derive from it — the re-seat reuses the
+    chosen pose's rotated hull minimum (hulls preserve coordinate extrema), so no
+    second union is needed after the rotation."""
+    mesh = obj.to_mesh(boolean_union=True)
+    current = tip_angle(obj, mesh=mesh)
+    if current >= min_tip_deg:
         return obj
-    bp = best_stable_pose(obj)
-    if bp is None or bp[0] <= tip_angle(obj):
+    bp = best_stable_pose(obj, mesh=mesh)
+    if bp is None or bp[0] <= current:
         return obj
-    R = bp[1]
+    tip, R, rest_zmin = bp
     com = np.asarray(obj.center_of_mass(1000.0), float)
     for p in obj.primitives:
         t = np.asarray(p.transform.translation, float)
         p.transform.translation = R @ (t - com) + com
         p.transform.rotation = R @ np.asarray(p.transform.rotation, float)
-    # re-seat so the lowest point rests on z=0
-    mesh = obj.to_mesh(boolean_union=True)
-    low = float(mesh.vertices[:, 2].min())
+    # Re-seat so the lowest point rests on z=0. After the rotation the COM is unmoved
+    # and the lowest point sits rest_zmin BELOW it (computed from the rotated hull).
+    low = float(com[2] + rest_zmin)
     for p in obj.primitives:
         p.transform.translation[2] -= low
     return obj

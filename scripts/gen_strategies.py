@@ -46,9 +46,9 @@ WEB = ROOT / "docs" / "static" / "images"
 
 TYPE_INDEX = {s.key: i for i, s in enumerate(PRIMITIVE_SPECS)}
 TYPES = [s.key for s in PRIMITIVE_SPECS]                       # spec order
-CURVED = {"cylinder", "sphere", "capsule", "cone", "torus", "ellipsoid",
-          "hollow_shell", "handle", "frustum", "hemisphere"}
-FACETED = {"box", "pyramid", "wedge", "hex_prism"}
+from cem import CURVED_TYPES, FACETED_TYPES                   # noqa: E402
+CURVED = set(CURVED_TYPES)
+FACETED = set(FACETED_TYPES)
 SCORER = ObjectScorer()
 DIST = ParameterDistribution(max_primitives=16)               # for _attach + size priors
 COL = {"accepted": verdict_color("accepted"), "opt": verdict_color("optimized")}
