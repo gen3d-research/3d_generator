@@ -80,6 +80,45 @@ def spawn_sdf(sdf_path: Path, name: str, x: float, y: float, z: float,
     return proc.returncode == 0 and b"data: true" in proc.stdout
 
 
+_SIM_TIME_RE = re.compile(r"sim_time\s*\{\s*sec:\s*(\d+)(?:\s*nsec:\s*(\d+))?", re.DOTALL)
+
+
+def world_sim_time(timeout: float = 6.0):
+    """Current simulation time (s) from /world/<W>/stats, or None."""
+    proc = subprocess.Popen(
+        ["gz", "topic", "-e", "-t", f"/world/{WORLD_NAME}/stats", "-n", "1"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return None
+    m = _SIM_TIME_RE.search(out.decode(errors="ignore"))
+    if not m:
+        return None
+    return float(m.group(1)) + float(m.group(2) or 0) * 1e-9
+
+
+def settle(settle_time_s: float, wall_timeout_factor: float = 10.0):
+    """Wait until the SIMULATION has advanced settle_time_s.
+
+    The old wall-clock time.sleep silently under-settles when the sim's real-time
+    factor drops under machine load — objects were then queried frozen mid-air at
+    their spawn pose (tilt == the spawn tilt, drift == the spawn height), corrupting
+    a whole run. Falls back to a wall sleep only if the stats topic is unreadable."""
+    t0 = world_sim_time()
+    if t0 is None:
+        time.sleep(settle_time_s)
+        return
+    deadline = time.time() + wall_timeout_factor * settle_time_s
+    while time.time() < deadline:
+        t = world_sim_time()
+        if t is not None and t - t0 >= settle_time_s:
+            return
+        time.sleep(0.2)
+
+
 def despawn(name: str):
     gz_ms = os.environ.get("GZ_SVC_TIMEOUT_MS", "15000")
     sub_s = float(os.environ.get("GZ_SVC_SUBPROC_S", "22"))
@@ -171,7 +210,7 @@ def evaluate_one(entry: dict, cfg: dict) -> dict:
         return {"name": name, "method": entry["method"],
                 "spawn_ok": False, "stable": False}
 
-    time.sleep(stab["settle_time_s"])
+    settle(stab["settle_time_s"])   # SIM-time wait (robust to real-time-factor drops)
     pose = query_pose(name)
     despawn(name)
     if pose is None:
