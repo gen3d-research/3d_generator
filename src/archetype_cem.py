@@ -120,10 +120,12 @@ class ArchetypeDistribution:
 
 
 class ArchetypeTrainer:
-    def __init__(self, factory_fn: Callable):
+    def __init__(self, factory_fn: Callable, scoring_config: ScoringConfig = None):
         self.factory_fn = factory_fn
         self.dist = ArchetypeDistribution(factory_fn)
-        self.scorer = ObjectScorer()
+        # Pass a ScoringConfig (e.g. dynamic_stability=True, point ⑦) to optimize the
+        # archetype's params against drop-aware stability instead of the static proxy.
+        self.scorer = ObjectScorer(scoring_config) if scoring_config is not None else ObjectScorer()
         self.rng = np.random.default_rng(42)
 
     def train(self, iterations: int = 20, samples_per_iter: int = 50) -> List[float]:
