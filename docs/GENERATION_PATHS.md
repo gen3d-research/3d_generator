@@ -77,19 +77,24 @@ types via epsilon-smoothing), so they're "constrained raw" until path ⑦ below 
 
 ## What could be added (same lens)
 
-Ordered by how directly each addresses the stability claim.
+Ordered by how directly each addresses the stability claim. **⑥–⑧ are now built.**
 
-- **⑥ Stability-repair / projection.** A post-hoc local optimizer that nudges *any* object's
-  placement/params until a **hard** stability (and grasp) constraint holds — projecting onto the
-  feasible manifold. Turns "optimizes a proxy" into "guarantees by construction," for archetypes
-  *and* free generations. Closest fix to the "guarantee" wording.
-- **⑦ Dynamic-stability-in-the-loop.** Replace/augment the static proxy with a fast settle check
-  (a few-step physics rollout, or a learned surrogate) so the optimizer sees what the drop test
-  sees. Closes the gap path ② exposes; would raise CEM's 88% dynamic-stable toward the proxy's ~100%.
-- **⑧ Archetype-seeded free CEM (warm-start).** Initialize the *free* distribution from an
-  archetype's primitives, then let **structure evolve**. Bridges fixed↔free: the optimizer can start
-  from a screwdriver and *deviate* toward stability (grow the handle into a base) instead of being
-  trapped in screwdriver-space. Cleanly separates "tune the design" (②) from "redesign it" (⑧).
+- **⑥ Stability-repair / projection.** ✅ `src/stability_repair.py` re-orients any object onto
+  its most-stable resting pose (the convex-hull facet with the largest tip-over margin), so it
+  settles upright **by construction** — the bridge from "optimizes a proxy" to "guarantees it".
+  `GeneratorConfig.repair_stability`. Validated: screwdriver 11°→27°, allen_key 0°→64°, pencil
+  4°→38° (re-oriented to lie flat); funnel (no better pose) left alone.
+- **⑦ Dynamic-stability-in-the-loop.** ✅ A tip-over metric `atan(margin / COM-height)`
+  (`ScoringConfig.dynamic_stability`) — a fast geometric surrogate (pybullet is unusable here:
+  NumPy-1-vs-2 ABI), corr 0.70 with the Gazebo drop. As a *soft* term it's diluted (no population
+  shift); as a **gate** (`dynamic_stability_gate`, total ×= clip(tip-stability, 0.2, 1)) it works:
+  free-CEM tippy tail 5/24 → **0/24**, mean tip-angle 28° → **49°**.
+- **⑧ Archetype-seeded free CEM (warm-start).** ✅ `ParameterDistribution.seed_from_object` /
+  `RoboticObjectGenerator.seed_from(name)` bias the *free* distribution's type/count/size priors
+  toward a seed, then `train()` lets **structure evolve**. Seeded from the screwdriver + gate, the
+  population reaches mean tip-angle 38.8°, 0/12 tippy (vs the screwdriver's ~11°) — it *deviates*
+  toward stability instead of being trapped, cleanly separating "tune the design" (②) from
+  "redesign it" (⑧).
 - **⑨ Constrained *optimized* generation.** Combine ⑤'s constraints with training (mask-aware CEM
   update, skipping the epsilon-smoothing leak): "optimize a stable+graspable object using only
   curved primitives."
