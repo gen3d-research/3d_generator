@@ -192,13 +192,22 @@ class PlanningEvaluator:
 
 # ---------------------------------------------------------------------------
 
+# panda_hand sits at panda_link8; the fingertip TCP is ~0.1034 m further along the
+# gripper +z (see demo_plan_driver.TIP_OFFSET — and its warning about 0.207). We plan
+# panda_link8 poses, so the link8 goal must sit TIP_OFFSET behind the desired
+# fingertip point. Without this, every "pre-grasp" placed the FINGERS ~5 cm PAST the
+# grasp center — inside the object/table — which kinematic-only planning silently
+# accepted and collision-aware planning correctly rejected at a rate of 100%.
+TIP_OFFSET = 0.1034
+
+
 def grasps_to_targets(grasps, object_spawn, pre_grasp_offset=0.05) -> List[PoseStamped]:
     spawn = np.array([object_spawn["x"], object_spawn["y"], object_spawn["z"]])
     out = []
     for g in grasps:
         center = spawn + np.asarray(g["center"])
         approach = np.asarray(g["approach"])
-        pre = center - approach * pre_grasp_offset
+        pre = center - approach * (TIP_OFFSET + pre_grasp_offset)
         ps = PoseStamped()
         ps.header.frame_id = "panda_link0"
         ps.pose.position.x = float(pre[0])
