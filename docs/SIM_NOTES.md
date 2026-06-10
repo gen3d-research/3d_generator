@@ -57,9 +57,19 @@ Consequences to be aware of:
 Numbers are only comparable within one configuration of
 {collision mode, spawn tilt, drift reference, settle time}:
 
-| result set | collision | tilt | drift ref |
-|---|---|---|---|
-| submitted paper (3 seeds) | single mesh | 0° | spawn point (pre-fix) |
-| corrected re-run 2026-06-10 (`aggregated_corrected.json`) | single mesh | 0° | table top |
-| 10,433-variant drop study | single mesh | 0° | table top |
-| anything exported after v2.9 | per-primitive | 5° | table top |
+| result set | collision | tilt | drift ref | settle |
+|---|---|---|---|---|
+| submitted paper (3 seeds) | single mesh | 0° | spawn point (pre-fix) | wall clock |
+| corrected re-run 2026-06-10 (`aggregated_corrected.json`) | single mesh | 0° | table top | wall clock |
+| 10,433-variant drop study | single mesh | 0° | table top | wall clock |
+| v2.9 re-run (`aggregated_v29.json`) | per-primitive | 5° | table top | **sim time** |
+
+The settle column matters: the wall-clock `time.sleep` silently under-settles when the
+sim's real-time factor drops under machine load (objects get queried frozen mid-air at
+the spawn pose). `settle()` now waits on `/world/<W>/stats` **simulation time** — the
+wall-clock result sets above were produced on an idle machine and spot-verified, but
+any future run is load-independent by construction.
+
+Cross-config robustness: the method ranking (CEM the only top-tier-on-all-three) is
+identical under the corrected mesh-collision config (CEM 97.7/98.7/92.0) and the v2.9
+config (CEM 98.0/97.3/88.0).
