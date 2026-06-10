@@ -12,7 +12,11 @@
 
 WS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 G_ROOT="$WS_ROOT/3d_generator"
-ROS_WS="$WS_ROOT/ros2_ws"
+# The ROS 2 workspace lives INSIDE the repo (3d_generator/ros2_ws), not as a
+# sibling of it. The old "$WS_ROOT/ros2_ws" pointed at a nonexistent directory,
+# so the source below failed silently and the Gazebo stage's eval-binary path
+# (stage 4) could not resolve at all.
+ROS_WS="$G_ROOT/ros2_ws"
 
 # shellcheck disable=SC1091
 source /opt/ros/jazzy/setup.bash
@@ -22,7 +26,9 @@ source "$ROS_WS/install/setup.bash"
 cleanup() {
     # gz transport advertises services by world name; stale gz_sim instances
     # from previous runs steal entity-factory calls non-deterministically.
-    pkill -KILL -f "gz sim" 2>/dev/null
+    # PRECISE pattern: the broad "gz sim" matches any process whose command
+    # line merely contains the string (other sessions, even shells).
+    pkill -KILL -f "gz sim -s -r" 2>/dev/null
     pkill -KILL -f "gazebo_stability_eval" 2>/dev/null
     pkill -KILL -f "moveit_planning_eval" 2>/dev/null
     pkill -KILL -f "home_joint_state_publisher" 2>/dev/null
@@ -98,7 +104,7 @@ for SEED in "$@"; do
             --manifest "$MANIFEST" --out "$GAZEBO" --max-objects 0 \
             > "$SEED_DIR/gazebo.log" 2>&1 || true
         pkill -f "ros2 launch.*stability" 2>/dev/null || true
-        pkill -f "gz sim" 2>/dev/null || true
+        pkill -f "gz sim -s -r" 2>/dev/null || true
         sleep 2
     fi
 
