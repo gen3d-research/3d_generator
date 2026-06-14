@@ -454,33 +454,20 @@
             <video src="videos/cem_pick_and_place_demo.mp4" controls muted loop playsinline></video>
             <div class="video-caption"><strong>Pick &amp; place demo.</strong> The Panda grasps CEM-generated
               objects in Gazebo by genuine finger friction (no kinematic weld) &mdash; reachability-scored
-              grasp selection and real-mesh collision avoidance &mdash; then lifts and places them.</div>
+              grasp selection and real-mesh collision avoidance &mdash; then lifts them, transports them
+              25&nbsp;cm laterally, and places them down. Shown side-by-side: Gazebo physics (left) and
+              RViz&nbsp;2 motion planning (right) on the same object.</div>
           </div>
         </div>
       </div>
-      <div class="columns is-centered is-multiline" style="margin-top:1rem;">
-        <div class="column is-6">
+      <div class="columns is-centered" style="margin-top:1rem;">
+        <div class="column is-four-fifths">
           <div class="video-card">
-            <video src="videos/side_by_side.mp4" controls muted loop playsinline></video>
-            <div class="video-caption"><strong>Side-by-side.</strong> Gazebo physics (left) and RViz&nbsp;2 motion planning (right) on the same CEM-generated object.</div>
-          </div>
-        </div>
-        <div class="column is-6">
-          <div class="video-card">
-            <video src="videos/rviz_motion_plan.mp4" controls muted loop playsinline></video>
-            <div class="video-caption"><strong>Pick &amp; place.</strong> The Panda picks the generated object, lifts it, transports it 25&nbsp;cm laterally, and places it down &mdash; all stages animated in RViz&nbsp;2.</div>
-          </div>
-        </div>
-        <div class="column is-6">
-          <div class="video-card">
-            <video src="videos/gz_drop_settle.mp4" controls muted loop playsinline></video>
-            <div class="video-caption"><strong>Drop &amp; settle.</strong> Gazebo dynamic-stability test: CEM-generated objects falling onto the table from 5&nbsp;cm.</div>
-          </div>
-        </div>
-        <div class="column is-6">
-          <div class="video-card">
-            <video src="videos/archetype_tour.mp4" controls muted loop playsinline></video>
-            <div class="video-caption"><strong>Archetype tour.</strong> A sequence of objects sampled from CEM, Fixed&nbsp;CAD, and CMA-ES.</div>
+            <video src="videos/drop_test.mp4" controls muted loop playsinline></video>
+            <div class="video-caption"><strong>Drop &amp; settle.</strong> Gazebo dynamic-stability test:
+              objects are spawned 5&nbsp;cm above the table and left to fall. The sequence spans objects
+              from CEM, Fixed&nbsp;CAD, CMA-ES, GA, and random search, so each method's shapes can be
+              compared as they settle.</div>
           </div>
         </div>
       </div>
