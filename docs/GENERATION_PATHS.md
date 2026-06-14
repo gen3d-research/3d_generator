@@ -18,6 +18,101 @@ baselines, ablations, or library tooling.
 
 ---
 
+## ▶ Generate with each path — exact commands
+
+Run everything from `3d_generator/` with the venv active (`source ~/venv/3d_cem/bin/activate`).
+If ROS 2 is sourced in your shell, run Python via `env -u PYTHONPATH ~/venv/3d_cem/bin/python`
+instead of bare `python`. All outputs land under `output/`.
+
+A path that writes a **manifest** (`…/manifest.json`) plugs straight into the **drop test**
+(GUIDE.md §5) and **pick-and-place test** (GUIDE.md §6). The `main.py` paths write a folder of
+URDF/SDF instead; wrap those (and the Python-API paths ⑥–⑫) into a manifest with the one snippet
+in **GUIDE.md §3.5**.
+
+### ① Archetype variants — raw (no optimization)
+```bash
+# every archetype once, at its hand-set defaults -> URDF/SDF per shape
+python src/main.py archetypes -o output/archetypes
+
+# OR: N parameter variants per archetype, as a drop/pick-testable manifest
+python scripts/build_archetype_manifest.py --variants 8 \
+    --archetypes mug_like,wine_bottle,nut \
+    --out output/path1_raw/manifest.json --export-root output/path1_raw/objects
+```
+Omit `--archetypes` to cover all 105; use `--variants 100` for the full per-archetype set.
+
+### ② Archetype variants — CEM-tuned (same structure, optimized params)
+```bash
+python scripts/build_archetype_manifest.py --variants 8 --train \
+    --archetypes mug_like,wine_bottle,nut \
+    --out output/path2_cem/manifest.json --export-root output/path2_cem/objects
+```
+`--train` adds the per-archetype CEM (`--iters` / `--samples` set its budget).
+
+### ③ Random search — baseline (free structure, no optimization)
+```bash
+python scripts/build_eval_manifest.py --methods random_search \
+    --budget 1500 --top-k 25 --seed 42 \
+    --out output/path3_random/manifest.json --export-root output/path3_random/objects
+```
+
+### ④ Free CEM — *the* generator (free structure, optimized)
+```bash
+# (a) CLI: train, generate, export a folder of URDF/SDF
+python src/main.py generate -n 25 -o output/path4_cem/objects \
+    --train --iterations 30 --samples 100 --seed 42
+
+# (b) the paper manifest: CEM + CMA-ES + GA + random + fixed_cad, all in one
+python scripts/build_eval_manifest.py --budget 1500 --top-k 25 --seed 42 \
+    --out output/seed_42/eval_manifest.json --export-root output/seed_42/manifest_objects
+python scripts/patch_sdf_collision.py --manifest output/seed_42/eval_manifest.json
+```
+In (b): `cem` = ④, `cmaes`/`ga` = the other optimizers over the same free space, `random_search`
+= ③, `fixed_cad` = ①. Pick a subset with `--methods cem cmaes ga`.
+
+### ⑤ Constrained strategies — visualization galleries (PNG only)
+```bash
+python scripts/gen_strategies.py --strategy all
+# strategies: single | pairs | curved | faceted | oneofeach | symmetric | default | all
+```
+Writes `docs/gallery/strategy_<name>.png`. (To *train* a palette-constrained generator and then
+drop/pick-test it, use path ⑨ below.)
+
+### ⑥–⑫ Python-API paths — one command each via `build_path_manifest.py`
+
+Each of these is path ④ with one switch flipped. `scripts/build_path_manifest.py --path N` builds a
+drop/pick-testable manifest for any of them (same shape as `build_eval_manifest.py`):
+
+```bash
+python scripts/build_path_manifest.py --path 6  --out output/path6/manifest.json  --export-root output/path6/objects    # ⑥ stability-repair
+python scripts/build_path_manifest.py --path 7  --out output/path7/manifest.json  --export-root output/path7/objects    # ⑦ dynamic-stability gate
+python scripts/build_path_manifest.py --path 8  --out output/path8/manifest.json  --export-root output/path8/objects    # ⑧ seed (screwdriver) + gate
+python scripts/build_path_manifest.py --path 9  --palette curved      --out output/path9/manifest.json  --export-root output/path9/objects     # ⑨ constrained-optimized
+python scripts/build_path_manifest.py --path 10 --out output/path10/manifest.json --export-root output/path10/objects   # ⑩ Pareto front
+python scripts/build_path_manifest.py --path 11 --target-size 0.05    --out output/path11/manifest.json --export-root output/path11/objects    # ⑪ targeted size
+python scripts/build_path_manifest.py --path 12 --prompt "a small stable graspable curved bottle" --out output/path12/manifest.json --export-root output/path12/objects   # ⑫ text2geometry
+```
+
+`--path N` is a preset over orthogonal knobs that also **stack standalone** (`--repair`, `--gate`,
+`--seed-archetype NAME`, `--palette curved|faceted|<keys>`, `--target-size M`, `--pareto`,
+`--prompt "..."`, plus `--n` / `--iterations` / `--samples` / `--seed`), so you can compose them
+exactly like the Python recipes:
+
+| # | Path | Runner knob | Python equivalent |
+|---|------|-------------|-------------------|
+| ⑥ | stability-repair — settle upright **by construction** | `--repair` | `GeneratorConfig(repair_stability=True)` |
+| ⑦ | dynamic-stability **gate** — kill the tippy tail | `--gate` | `GeneratorConfig(dynamic_stability_gate=True)` |
+| ⑧ | archetype-seeded free CEM — warm-start, evolve | `--seed-archetype screwdriver --gate` | `gen.seed_from("screwdriver")` |
+| ⑨ | constrained-**optimized** — train on a palette | `--palette curved` | `gen.constrain_types(CURVED_TYPES)` |
+| ⑩ | Pareto front — the trade-off set, not the weighted sum | `--pareto` | `pareto_objects(objs, gen.scorer, keys=(...))` |
+| ⑪ | targeted size | `--target-size 0.05` | `gen.target_size(0.05)` |
+| ⑫ | text2geometry — prompt → config → CEM | `--prompt "..."` | `generate_from_text("...")` |
+
+They compose: ⑧ = ⑦ + a seed; ⑫ composes ⑦/⑧/⑨/⑪ from one sentence. For full control (or to embed
+in your own code), the equivalent inline snippet is in **GUIDE.md §3.5**.
+
+---
+
 ## What exists today
 
 ### ④ Free CEM generation — *the* generator

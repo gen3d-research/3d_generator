@@ -35,6 +35,11 @@ with **`env -u PYTHONPATH`** so its pytest/plugin paths don't leak in. The ROS 2
 
 The pipeline is **sample → score → CEM update → export**. No datasets, no GPU.
 
+> **Want a specific generation path?** All **12 paths**, each as a copy-paste command, are in
+> [`docs/GENERATION_PATHS.md`](docs/GENERATION_PATHS.md). This section details the most-used path
+> (④ free CEM) and the `main.py` subcommands; **§3.5** below turns *any* path's output into a
+> drop-/pick-testable manifest.
+
 ```bash
 python src/main.py demo
 ```
@@ -175,6 +180,112 @@ python scripts/run_unified_eval.py --budget 1500 --top-k 100 --seed 42 \
 
 ---
 
+## 3.5 Build a manifest from a custom generator (paths ⑥–⑫)
+
+`build_eval_manifest.py` only knows the five paper methods. `scripts/build_path_manifest.py` is its
+counterpart for the Python-API paths (⑥–⑫ in [`docs/GENERATION_PATHS.md`](docs/GENERATION_PATHS.md))
+— or any composition of them — and writes a manifest **identical in shape**, so it drops straight
+into §5/§6.
+
+```bash
+# one path = one command (run --help for the full preset table)
+python scripts/build_path_manifest.py --path 6 \
+    --out output/path6/manifest.json --export-root output/path6/objects
+python scripts/build_path_manifest.py --path 12 \
+    --prompt "a small stable graspable curved bottle" \
+    --out output/path12/manifest.json --export-root output/path12/objects
+
+# or compose the knobs by hand — they stack (--method-tag sets the §6 method:= label)
+python scripts/build_path_manifest.py --seed-archetype mug_like --gate --palette curved \
+    --method-tag mug_seeded \
+    --out output/mug_seeded/manifest.json --export-root output/mug_seeded/objects
+
+# then stiffen contact/friction so the gripper can hold objects:
+python scripts/patch_sdf_collision.py --manifest output/path6/manifest.json
+```
+
+Knobs: `--path {4,6,7,8,9,10,11,12}` preset, or stack `--repair` ⑥ · `--gate` ⑦ ·
+`--seed-archetype NAME` ⑧ · `--palette curved|faceted|<keys>` ⑨ · `--pareto` ⑩ ·
+`--target-size M` ⑪ · `--prompt "..."` ⑫. Budget: `--n` / `--iterations` / `--samples` / `--seed`.
+When it finishes it prints the exact `--manifest` (drop test) and `manifest:= method:=` (pick test)
+lines to paste.
+
+Now `--manifest output/path6/manifest.json` works in the **§5 drop test** as-is, and
+`manifest:=…/path6/manifest.json method:=path6` works in the **§6 pick test** (the demo filters by
+`method`, so pass the `method:=` tag the runner reports).
+
+### Under the hood — the equivalent inline snippet
+
+`build_path_manifest.py` is just this loop; copy it into your own code to customize the export or
+grasp settings. Edit **only** the `CONFIGURE` block; everything below it is the same wiring
+`build_eval_manifest.py` uses.
+
+```bash
+env -u PYTHONPATH ~/venv/3d_cem/bin/python - <<'PY'
+import sys, json; sys.path.insert(0, "src")
+from pathlib import Path
+import numpy as np, trimesh
+from generator import RoboticObjectGenerator, GeneratorConfig
+from export import URDFExporter, ExportConfig
+from grasp_planner import plan_grasps, GripperSpec
+from cem import CURVED_TYPES, FACETED_TYPES
+
+# ===== CONFIGURE THE PATH (uncomment the line(s) for the path you want) =====
+cfg = GeneratorConfig(seed=42)              # base = ④ free CEM
+# cfg.repair_stability = True               # ⑥ re-orient onto a stable resting pose
+# cfg.dynamic_stability_gate = True         # ⑦ suppress the tippy tail (hard gate)
+gen = RoboticObjectGenerator(cfg)
+# gen.seed_from("screwdriver")              # ⑧ warm-start from an archetype, let structure evolve
+# gen.constrain_types(CURVED_TYPES)         # ⑨ train using only curved (or FACETED_TYPES) primitives
+# gen.target_size(0.05)                     # ⑪ bias toward a 5 cm longest extent
+gen.train(verbose=False)
+objs = gen.generate(15)
+# --- ⑫ text2geometry: replace the four lines above with -------------------
+# from text2gen import generate_from_text
+# objs, intent = generate_from_text("a small stable graspable curved bottle", n=15)
+# --- ⑩ Pareto: keep only the non-dominated stability/graspability set ------
+# from pareto import pareto_objects
+# objs, _ = pareto_objects(objs, gen.scorer, keys=("stability_score", "graspability_score"))
+
+# ===== EXPORT + WRITE A DROP/PICK-TESTABLE MANIFEST (don't edit below) =====
+method, root = "path_demo", Path("output/path_demo/objects")
+exporter = URDFExporter(ExportConfig(use_convex_hull=False, simplify_collision=False))
+manifest = []
+for k, obj in enumerate(objs):
+    obj.name = f"{method}_{k:04d}"
+    paths = exporter.export(obj, root / obj.name, obj.name)
+    rep = plan_grasps(obj, GripperSpec(), n_surface=256, max_pairs=1500, max_returned=12, seed=42 + k)
+    vm = trimesh.load(paths["visual_mesh"], force="mesh")
+    mass, _, com = obj.mesh_mass_properties(1000.0)
+    g = []
+    for gr in rep.grasps[:12]:
+        ax = np.asarray(gr.contact2) - np.asarray(gr.contact1); n = float(np.linalg.norm(ax))
+        ax = (ax / n).tolist() if n > 1e-9 else [0.0, 1.0, 0.0]
+        g.append({"center": gr.center.tolist(), "approach": gr.approach.tolist(), "axis": ax,
+                  "width": float(gr.width), "margin": float(gr.margin),
+                  "score": float(getattr(gr, "score", 0.0))})
+    manifest.append({"name": obj.name, "method": method,
+        "urdf": str(Path(paths["urdf"]).resolve()), "sdf": str(Path(paths["sdf"]).resolve()),
+        "visual_mesh": str(Path(paths["visual_mesh"]).resolve()),
+        "collision_mesh": str(Path(paths["collision_mesh"]).resolve()),
+        "mass": float(mass), "com": list(map(float, com)),
+        "aabb": [vm.bounds[0].tolist(), vm.bounds[1].tolist()],
+        "extents": (vm.bounds[1] - vm.bounds[0]).tolist(),
+        "grasps": g, "n_grasps_synth": len(rep.grasps)})
+out = Path("output/path_demo/manifest.json"); out.parent.mkdir(parents=True, exist_ok=True)
+out.write_text(json.dumps(manifest, indent=2)); print("wrote", len(manifest), "->", out)
+PY
+
+# stiffen contact/friction (same as the paper manifests) so the gripper can hold objects:
+python scripts/patch_sdf_collision.py --manifest output/path_demo/manifest.json
+```
+
+Now `--manifest output/path_demo/manifest.json` works in the **§5 drop test** as-is, and
+`manifest:=…/path_demo/manifest.json method:=path_demo` works in the **§6 pick test** (the pick
+demo filters by `method`, so pass `method:=path_demo` to match the tag this snippet writes).
+
+---
+
 ## 4. Build the ROS 2 package (once)
 
 ```bash
@@ -194,50 +305,76 @@ Needs `ros-jazzy-moveit`, `ros-jazzy-moveit-py`, the Panda MoveIt config/descrip
 
 ---
 
-## 5. Drop test (Gazebo dynamic stability)
+## 5. Drop test (Gazebo dynamic stability) — watch it, or score it
 
 Spawns each manifest object ~5 cm above the table in `panda_eval_world`, lets physics settle,
 then measures **vertical drift** (from the table top, the expected rest height) and **tilt** —
-"stable" iff drift < 5 cm and tilt < 25° (`config/eval_config.yaml`).
+"stable" iff drift < 5 cm and tilt < 25° (`config/eval_config.yaml`). Build the ROS 2 package
+first (§4) and `source ros2_ws/install/setup.bash`. The two modes below use the **same evaluator**;
+they differ only in which world launch you start (windowed vs. headless).
+
+### 5a. Visualize it — watch objects fall in a Gazebo window
 
 ```bash
-# Terminal A — the world (headless server). Use stability_world_gui.launch.py for a window.
+# Terminal A — open the world in a gz window
+ros2 launch generated_objects_eval stability_world_gui.launch.py
+```
+
+```bash
+# Terminal B — drop the first few objects so you can watch each one settle
+ros2_ws/install/generated_objects_eval/bin/gazebo_stability_eval \
+    --manifest $(pwd)/output/seed_42/eval_manifest.json \
+    --out $(pwd)/output/seed_42/gazebo_stability.json \
+    --max-objects 6
+```
+Keep `--max-objects` small (≈6) so you can actually see each drop. Swap the manifest for **any**
+path's `manifest.json` (e.g. `output/path_demo/manifest.json` from §3.5) to watch that path's parts.
+To record a clip, use Gazebo's `Settings → Video Recording`, or see [`DEMO.md`](DEMO.md) §3.
+
+### 5b. Score it — headless, every object
+
+```bash
+# Terminal A — headless server (no window)
 ros2 launch generated_objects_eval stability_world.launch.py
 ```
-- `ros2 launch <pkg> <file>` — start the Gazebo world that the evaluator spawns objects into.
-  No arguments needed; `_gui` variant opens the gz window (for recording).
 
 ```bash
 # Terminal B — drop every object and score it
 ros2_ws/install/generated_objects_eval/bin/gazebo_stability_eval \
     --manifest $(pwd)/output/seed_42/eval_manifest.json \
     --out $(pwd)/output/seed_42/gazebo_stability.json \
-    --max-objects 25
+    --max-objects 0          # 0 = all (the default)
 ```
+
+Flags / notes (both modes):
 - We call the **binary directly** (this node is registered as a console script, not via
   `ros2 run`). `$(pwd)/...` makes the paths absolute so gz finds the SDFs.
 - `--manifest PATH` — the manifest whose objects to drop (any manifest with `sdf` paths;
   hand-write a one-entry manifest to drop a single specific part).
 - `--out PATH` — per-object results JSON (`spawn_ok`, `stable`, `tilt_deg`, `drift_m`,
-  `final_pose`).
-- `--max-objects 25` — cap how many to test (**0 = all**, the default). Use a small number
-  for a quick check or a short video.
-- *(other flags)* `--config PATH` — override `eval_config.yaml` (spawn pose, settle time,
-  drift/tilt tolerances).
+  `final_pose`); the node also prints a per-method `spawn_ok / stable / rate=%` summary.
+- `--max-objects N` — cap how many to test (**0 = all**, the default).
+- `--config PATH` — override `eval_config.yaml` (spawn pose, settle time, drift/tilt tolerances).
+- **At scale** (thousands of objects) use the crash-resilient chunked runner — see §7b.
 
-It prints a per-method summary (`spawn_ok`, `stable`, `rate=%`). Kill stale sims between runs
-with a **precise** pattern — `pkill -KILL -f "gz sim -s -r"` (two same-world servers fight over
-the spawn service). Avoid the broad `pkill -f "gz sim"`: it matches any process whose command
-line merely contains "gz sim", which can SIGKILL an unrelated shell or a live world.
+Kill stale sims between runs with a **precise** pattern — `pkill -KILL -f "gz sim -s -r"` (two
+same-world servers fight over the spawn service). Avoid the broad `pkill -f "gz sim"`: it matches
+any process whose command line merely contains "gz sim", which can SIGKILL an unrelated shell or a
+live world.
 
 ---
 
-## 6. Pick-and-place test (MoveIt 2 + Gazebo, with physics)
+## 6. Pick-and-place test (MoveIt 2 + Gazebo) — watch it, or score it
 
 The Panda runs an **8-stage** pick-and-place under `gz_ros2_control`:
 *ready → pre-grasp → grasp → lift → transport → place → retract*. The object is held by genuine
 finger friction (effort-controlled gripper), the table is a MoveIt `CollisionObject`, and the
-object's real collision mesh is added to the planning scene.
+object's real collision mesh is added to the planning scene. Build + `source` the package (§4) first.
+
+### 6a. Visualize it — Gazebo + RViz, the arm actually picks (full physics)
+
+One launch brings up the gz window (object on the table), an RViz window (the Panda planning), and
+cycles a new object each pass:
 
 ```bash
 source ros2_ws/install/setup.bash
@@ -246,20 +383,24 @@ ros2 launch generated_objects_eval visual_demo.launch.py \
     method:=cem use_gz_control:=true loop:=true
 ```
 - `manifest:=PATH` — which manifest to pull objects from (auto-detects `output/seed_42/...`
-  if omitted).
+  if omitted). For a **custom path** (§3.5), point at its `manifest.json` **and** pass
+  `method:=path_demo` so the demo finds those entries.
 - `method:=cem` — which generator's objects to cycle: `cem | cmaes | ga | random_search |
-  fixed_cad` (default `cem`).
+  fixed_cad` (or your own method tag). Default `cem`.
 - `use_gz_control:=true` — **the arm actually moves in physics** under `gz_ros2_control`. Set
-  `false` (default) for a faster RViz-only animation (no Gazebo controllers).
+  `false` (default) for a faster **RViz-only animation** (no Gazebo controllers) — useful on a
+  slow GPU.
 - `loop:=true` — keep cycling objects indefinitely (good for screen-recording; default true).
 - *(other args)* `headless:=true` runs gz server-only (no window); `render_engine:=ogre`
   falls back from `ogre2` for hybrid-GPU laptops.
 
 To pin a **specific** object / spawn pose, run the driver directly with
-`--object-index N`, `--spawn-x/-y/-z`, `--place-dx/-dy/-dz` (see `DEMO.md`).
+`--object-index N`, `--spawn-x/-y/-z`, `--place-dx/-dy/-dz` (see [`DEMO.md`](DEMO.md)).
+See [`DEMO.md`](DEMO.md) for recording the videos, RViz tips, and GPU/`libEGL` gotchas.
 
-**Headless / batch MoveIt-plan success** (no window) — plans to every grasp pose, records the
-success rate:
+### 6b. Score it — headless MoveIt-plan success (no window)
+
+Plans to every grasp pose in the manifest and records the success rate:
 
 ```bash
 ros2 launch generated_objects_eval moveit_planning_eval.launch.py \
@@ -272,8 +413,6 @@ ros2 launch generated_objects_eval moveit_planning_eval.launch.py \
 - `max_objects:=30` — cap objects (**0 = all**). `moveit_py` 2.12 segfaults on shutdown
   *after* writing the JSON — wait for `"Wrote N results"` then Ctrl-C (or use
   `scripts/run_multi_seed.sh`, which polls + kills automatically).
-
-See [`DEMO.md`](DEMO.md) for recording the videos, RViz tips, and GPU/`libEGL` gotchas.
 
 ---
 

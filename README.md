@@ -65,6 +65,13 @@ python main.py demo
 python main.py archetypes -o output/archetypes
 ```
 
+The repo can produce objects **12 different ways** (archetype-raw, archetype-CEM, random,
+free CEM, constrained, stability-repair, seeded, Pareto, targeted-size, text2geometry, …).
+Each one as a copy-paste command is in
+[**`docs/GENERATION_PATHS.md` → "Generate with each path"**](docs/GENERATION_PATHS.md), and the
+end-to-end *generate → visualize → drop test → pick-and-place* walkthrough is in
+[**`GUIDE.md`**](GUIDE.md).
+
 ### Visualize the shape library
 
 All renderers are headless and write PNGs under `docs/gallery/`:
@@ -219,6 +226,7 @@ in [`docs/PRIMITIVES.md`](docs/PRIMITIVES.md).**
 ├── scripts/                  # Reproduction + analysis scripts (selection)
 │   ├── build_eval_manifest.py      5-method eval manifest (objects + grasps)
 │   ├── build_archetype_manifest.py N variants per archetype -> ROS 2 manifest
+│   ├── build_path_manifest.py      one generation path (④,⑥-⑫) -> ROS 2 manifest
 │   ├── run_unified_eval.py / run_multi_seed.sh / aggregate_seeds.py
 │   ├── run_drop_test_chunked.sh    crash-resilient Gazebo drop test at scale
 │   ├── patch_sdf_collision.py      contact/friction patch for finger grasps
