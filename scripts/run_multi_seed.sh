@@ -5,6 +5,7 @@
 #
 # Usage:
 #   scripts/run_multi_seed.sh 42 43 44
+#   OUT_ROOT=output/my_study scripts/run_multi_seed.sh 42 43 44   # fresh result set
 
 # Intentionally no `set -e`: the moveit_py shutdown can emit a SIGSEGV
 # *after* the JSON has been written, which we want to treat as a clean
@@ -17,6 +18,10 @@ G_ROOT="$WS_ROOT/3d_generator"
 # so the source below failed silently and the Gazebo stage's eval-binary path
 # (stage 4) could not resolve at all.
 ROS_WS="$G_ROOT/ros2_ws"
+# Where seed_<seed>/ dirs go. A stage is skipped when its JSON already exists,
+# so point OUT_ROOT at a new directory to re-run seeds that have results.
+OUT_ROOT="${OUT_ROOT:-$G_ROOT/output}"
+case "$OUT_ROOT" in /*) ;; *) OUT_ROOT="$G_ROOT/$OUT_ROOT" ;; esac
 
 # shellcheck disable=SC1091
 source /opt/ros/jazzy/setup.bash
@@ -55,7 +60,7 @@ cleanup() {
 }
 
 for SEED in "$@"; do
-    SEED_DIR="$G_ROOT/output/seed_${SEED}"
+    SEED_DIR="$OUT_ROOT/seed_${SEED}"
     mkdir -p "$SEED_DIR"
     MANIFEST="$SEED_DIR/eval_manifest.json"
     UNIFIED="$SEED_DIR/unified_eval.json"
@@ -130,4 +135,4 @@ done
 
 echo
 echo "All seeds finished. Aggregate with:"
-echo "  python3 $G_ROOT/scripts/aggregate_seeds.py $*"
+echo "  python3 $G_ROOT/scripts/aggregate_seeds.py $* --root $OUT_ROOT"

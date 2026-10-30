@@ -124,11 +124,14 @@ def main():
     p.add_argument("seeds", nargs="+", type=int)
     p.add_argument("--out", type=Path,
                    default=ROOT / "output" / "aggregated.json")
+    p.add_argument("--root", type=Path, default=ROOT / "output",
+                   help="directory holding the seed_<seed>/ result dirs "
+                        "(run_multi_seed.sh OUT_ROOT)")
     args = p.parse_args()
 
     per_seed = {}
     for seed in args.seeds:
-        d = ROOT / "output" / f"seed_{seed}"
+        d = args.root / f"seed_{seed}"
         unified = json.loads((d / "unified_eval.json").read_text())
         moveit = json.loads((d / "moveit_results.json").read_text())
         gazebo = json.loads((d / "gazebo_stability.json").read_text())
