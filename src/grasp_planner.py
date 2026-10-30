@@ -98,7 +98,9 @@ def _safe_mesh(obj: CompositeObject) -> Optional[trimesh.Trimesh]:
 
 def _sample_surface(mesh: trimesh.Trimesh, n: int, rng: np.random.Generator
                     ) -> Tuple[np.ndarray, np.ndarray]:
-    pts, face_idx = trimesh.sample.sample_surface(mesh, n)
+    # Draw from the caller's generator: without it trimesh samples from an
+    # unseeded source and plan_grasps(seed=...) was not reproducible.
+    pts, face_idx = trimesh.sample.sample_surface(mesh, n, seed=rng)
     # Inward-pointing normals (negate face normals because trimesh returns outward).
     n_out = mesh.face_normals[face_idx]
     return np.asarray(pts), np.asarray(n_out)

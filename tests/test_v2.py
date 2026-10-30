@@ -362,3 +362,12 @@ def test_table_check_only_removes_grasps():
     checked = plan_grasps(obj, n_surface=128, max_pairs=600, seed=0, table_check=True)
     assert len(checked.grasps) <= len(base.grasps)
     assert all(hand_clears_table(g) for g in checked.grasps)
+
+
+def test_plan_grasps_is_reproducible_for_a_seed():
+    from archetypes import ARCHETYPE_REGISTRY
+    from grasp_planner import plan_grasps
+    obj = ARCHETYPE_REGISTRY["small_box"]()
+    a = plan_grasps(obj, n_surface=128, max_pairs=600, seed=3)
+    b = plan_grasps(obj, n_surface=128, max_pairs=600, seed=3)
+    assert [tuple(g.center) for g in a.grasps] == [tuple(g.center) for g in b.grasps]
