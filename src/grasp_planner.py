@@ -41,6 +41,19 @@ class GripperSpec:
     finger_width: float = 0.022
     palm_clearance: float = 0.02  # extra clearance behind the fingertips
     mu: float = 0.5              # Coulomb friction coefficient assumed
+    # Hand-body-vs-table check (opt-in, plan_grasps(table_check=True)). The
+    # finger checks above ignore the hand: a side approach whose antipodal axis
+    # is vertical drives the palm into the table, which a physics test exposes
+    # (src/mujoco_eval.py) and the force-closure metric never sees. Geometry is
+    # the MuJoCo evaluator's Panda-like gripper, in the grasp frame (x = pad
+    # width, y = antipodal axis, z = approach, origin = grasp centre).
+    pad_half: Tuple[float, float, float] = (0.01, 0.005, 0.02)
+    pad_z: float = -0.01             # pad centre along the approach
+    palm_half: Tuple[float, float, float] = (0.012, 0.045, 0.01)
+    palm_z: float = -0.04
+    preshape_clearance: float = 0.015  # per finger, beyond half the grasp width
+    pregrasp_offset: float = 0.10      # approach starts this far back
+    table_tolerance: float = 0.002
 
 
 @dataclass
@@ -519,17 +532,61 @@ def _score_grasp(g: Grasp, ctx: _GeomCtx, gripper: GripperSpec,
     return score * close_ok * base_ok * top_ok * stable_ok
 
 
+def gripper_min_z(center, approach, axis, width: float,
+                  gripper: Optional[GripperSpec] = None) -> float:
+    """Lowest point of the gripper (pads + palm) over the straight approach
+    from the pre-grasp to the grasp pose, in the object frame. Objects are
+    exported base-seated, so the table is z = 0 and a value below
+    -gripper.table_tolerance means the hand hits the table."""
+    gripper = gripper or GripperSpec()
+    z = _unit(np.asarray(approach, float))
+    y = np.asarray(axis, float)
+    y = y - (y @ z) * z
+    if np.linalg.norm(y) < 1e-9:
+        return -np.inf
+    y = _unit(y)
+    R = np.column_stack([np.cross(y, z), y, z])
+    open_half = min(gripper.width_max / 2,
+                    width / 2 + gripper.preshape_clearance)
+    px, py, pz = gripper.pad_half
+    boxes = [((0.0, s * (open_half + py), gripper.pad_z), (px, py, pz)) for s in (-1, 1)]
+    boxes.append(((0.0, 0.0, gripper.palm_z), gripper.palm_half))
+    corners = []
+    for (cx, cy, cz), (hx, hy, hz) in boxes:
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                for sz in (-1, 1):
+                    corners.append((cx + sx * hx, cy + sy * hy, cz + sz * hz))
+    local = np.asarray(corners)
+    lowest = np.inf
+    for back in (gripper.pregrasp_offset, 0.0):     # both ends of the approach
+        world = np.asarray(center, float) - back * z + local @ R.T
+        lowest = min(lowest, float(world[:, 2].min()))
+    return lowest
+
+
+def hand_clears_table(g: "Grasp", gripper: Optional[GripperSpec] = None) -> bool:
+    gripper = gripper or GripperSpec()
+    return gripper_min_z(g.center, g.approach, g.contact2 - g.contact1, g.width,
+                         gripper) >= -gripper.table_tolerance
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 def plan_grasps(obj: CompositeObject, gripper: Optional[GripperSpec] = None,
                 n_surface: int = 256, max_pairs: int = 2000,
-                max_returned: int = 20, seed: int = 0) -> GraspReport:
+                max_returned: int = 20, seed: int = 0,
+                table_check: bool = False) -> GraspReport:
     """Synthesize antipodal force-closure grasps for *obj*.
 
     Returns a GraspReport with up to *max_returned* validated grasps and counts
-    of how many pairs passed each test (useful for diagnostics)."""
+    of how many pairs passed each test (useful for diagnostics).
+
+    ``table_check=True`` also drops grasps whose hand body would reach below
+    the table (``hand_clears_table``). Off by default so published numbers
+    reproduce."""
     gripper = gripper or GripperSpec()
     rng = np.random.default_rng(seed)
     mesh = _safe_mesh(obj)
@@ -579,6 +636,8 @@ def plan_grasps(obj: CompositeObject, gripper: Optional[GripperSpec] = None,
         g.score = _score_grasp(g, ctx, gripper,
                                waist_bonus=0.05 if id(g) in waist_set else 0.0)
     candidates.sort(key=lambda g: g.score, reverse=True)
+    if table_check:
+        candidates = [g for g in candidates if hand_clears_table(g, gripper)]
     return GraspReport(n_attempts=n_attempts,
                        n_friction_pass=n_friction,
                        n_collision_free=n_collision,

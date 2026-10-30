@@ -82,6 +82,10 @@ def main():
                         "reachability filter has reachable approaches to choose "
                         "from — e.g. a low side grasp may collide while a "
                         "lower-scored top-down grasp is the only reachable one.")
+    p.add_argument("--table-check", action="store_true",
+                   help="Drop grasps whose hand body would reach below the table "
+                        "(grasp_planner.hand_clears_table). Off by default so "
+                        "published manifests reproduce.")
     args = p.parse_args()
 
     # Mesh collision (not convex hull, not simplified) so the object's collision
@@ -100,7 +104,7 @@ def main():
             paths = exporter.export(obj, obj_dir, obj.name)
             report = plan_grasps(obj, GripperSpec(), n_surface=256,
                                  max_pairs=1500, max_returned=args.n_grasps,
-                                 seed=args.seed + k)
+                                 seed=args.seed + k, table_check=args.table_check)
             # Mass + center of mass (object frame) so the demo can (a) auto-size
             # the closing force and (b) prefer grasps near the CoM.
             try:

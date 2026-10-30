@@ -338,3 +338,27 @@ def test_paper_repro_restricts_space():
     assert np.all(probs[4:] == 0.0)
     rng = np.random.default_rng(1)
     assert max(len(g.distribution.sample_object(rng).primitives) for _ in range(50)) <= 4
+
+
+# --- grasp planner: hand-body-vs-table check (opt-in) -------------------------
+
+def test_gripper_min_z_flags_low_side_grasp_with_vertical_fingers():
+    from grasp_planner import GripperSpec, gripper_min_z
+    gs = GripperSpec()
+    # side approach, antipodal axis vertical, 1 cm above the table: the palm
+    # spans +-4.5 cm along the finger axis and must reach below z = 0
+    low = gripper_min_z([0, 0, 0.01], [1, 0, 0], [0, 0, 1], 0.02, gs)
+    assert low < -gs.table_tolerance
+    # same height, horizontal antipodal axis: the hand stays above the table
+    flat = gripper_min_z([0, 0, 0.03], [1, 0, 0], [0, 1, 0], 0.02, gs)
+    assert flat >= -gs.table_tolerance
+
+
+def test_table_check_only_removes_grasps():
+    from archetypes import ARCHETYPE_REGISTRY
+    from grasp_planner import hand_clears_table, plan_grasps
+    obj = ARCHETYPE_REGISTRY["mug_like"]()
+    base = plan_grasps(obj, n_surface=128, max_pairs=600, seed=0)
+    checked = plan_grasps(obj, n_surface=128, max_pairs=600, seed=0, table_check=True)
+    assert len(checked.grasps) <= len(base.grasps)
+    assert all(hand_clears_table(g) for g in checked.grasps)
