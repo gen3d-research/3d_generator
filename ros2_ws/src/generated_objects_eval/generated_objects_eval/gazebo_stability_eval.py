@@ -106,17 +106,21 @@ def settle(settle_time_s: float, wall_timeout_factor: float = 10.0):
     The old wall-clock time.sleep silently under-settles when the sim's real-time
     factor drops under machine load — objects were then queried frozen mid-air at
     their spawn pose (tilt == the spawn tilt, drift == the spawn height), corrupting
-    a whole run. Falls back to a wall sleep only if the stats topic is unreadable."""
+    a whole run. Falls back to a wall sleep only if the stats topic is unreadable.
+
+    Returns False if the wall timeout expired before the simulation advanced
+    settle_time_s (the caller must not score such an object)."""
     t0 = world_sim_time()
     if t0 is None:
         time.sleep(settle_time_s)
-        return
+        return True
     deadline = time.time() + wall_timeout_factor * settle_time_s
     while time.time() < deadline:
         t = world_sim_time()
         if t is not None and t - t0 >= settle_time_s:
-            return
+            return True
         time.sleep(0.2)
+    return False
 
 
 def despawn(name: str, retries: int = 3):
@@ -219,12 +223,23 @@ def evaluate_one(entry: dict, cfg: dict) -> dict:
         return {"name": name, "method": entry["method"],
                 "spawn_ok": False, "stable": False}
 
-    settle(stab["settle_time_s"])   # SIM-time wait (robust to real-time-factor drops)
+    # SIM-time wait (robust to real-time-factor drops). Under heavy machine load
+    # the sim can crawl; give it up to 3 x 10 x settle_time of wall time.
+    settled = any(settle(stab["settle_time_s"]) for _ in range(3))
     pose = query_pose(name)
     despawn(name)
     if pose is None:
         return {"name": name, "method": entry["method"],
                 "spawn_ok": True, "stable": False, "reason": "no_pose"}
+    # An object read back exactly at its spawn pose never fell: the sim did not
+    # advance (or the spawn landed late). That is a harness failure, not a
+    # stability verdict, so report it as unsettled; aggregators exclude it.
+    frozen = (abs(pose["position"][2] - spawn_z) < 1e-4 and
+              abs(tilt_angle_deg(np.asarray(pose["orientation"])) - tilt_deg) < 0.01)
+    if not settled or frozen:
+        return {"name": name, "method": entry["method"], "spawn_ok": True,
+                "stable": False, "settled": False, "reason": "unsettled",
+                "final_pose": pose}
     # Drift = deviation from the EXPECTED resting height (the table top), not from
     # the elevated spawn point. Objects are base-seated (model origin at z=0), so a
     # cleanly-settled object rests with its origin at the table top (spawn["z"]).

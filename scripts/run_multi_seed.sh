@@ -1,7 +1,9 @@
 #!/bin/bash
 # Run the full evaluation pipeline (manifest build, unified Python eval,
 # MoveIt 2 planning eval, Gazebo dynamic-stability eval) for one or more
-# random seeds. Outputs land in 3d_generator/output/seed_<seed>/.
+# random seeds. Outputs land in 3d_generator/output/seed_<seed>/ (or OUT_ROOT).
+# Knobs: MOVEIT_TIMEOUT_S (default 3600), GZ_CHUNK (objects per fresh gz
+# world, default 25), GZ_WORKERS (parallel gz worlds, default 1).
 #
 # Usage:
 #   scripts/run_multi_seed.sh 42 43 44
@@ -105,7 +107,9 @@ for SEED in "$@"; do
             manifest:="$MANIFEST" out:="$MOVEIT" max_objects:=0 \
             > "$SEED_DIR/moveit.log" 2>&1 &
         LAUNCH_PID=$!
-        for _ in $(seq 1 600); do
+        # Collision-aware planning takes ~10 s/object (~20 min for 125) and more
+        # under load; the old 600 s cap killed it before it wrote any JSON.
+        for _ in $(seq 1 "${MOVEIT_TIMEOUT_S:-3600}"); do
             sleep 1
             if [ -s "$MOVEIT" ]; then
                 # Give it a few more seconds to flush the per-grasp records.
@@ -127,16 +131,10 @@ for SEED in "$@"; do
 
     if [ ! -s "$GAZEBO" ]; then
         echo "[$SEED] Gazebo stability eval"
-        setsid ros2 launch generated_objects_eval stability_world.launch.py \
-            > "$SEED_DIR/gz_world.log" 2>&1 &
-        WORLD_PID=$!
-        sleep 6
-        timeout 900 "$ROS_WS/install/generated_objects_eval/bin/gazebo_stability_eval" \
-            --manifest "$MANIFEST" --out "$GAZEBO" --max-objects 0 \
-            > "$SEED_DIR/gazebo.log" 2>&1 || true
-        kill -KILL -- -"$WORLD_PID" 2>/dev/null
-        kill_own "gz sim -s -r"
-        sleep 2
+        # Fresh gz world per chunk of GZ_CHUNK objects (crash- and load-
+        # resilient; one long-lived world under load mis-scored whole blocks).
+        bash "$G_ROOT/scripts/run_drop_test_chunked.sh" "$MANIFEST" "$GAZEBO" \
+            "${GZ_CHUNK:-25}" "${GZ_WORKERS:-1}" > "$SEED_DIR/gazebo.log" 2>&1
     fi
 
     echo "[$SEED] done"

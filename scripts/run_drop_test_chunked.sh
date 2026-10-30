@@ -16,7 +16,9 @@ MAN="${1:?manifest path required}"
 OUT="${2:?output json path required}"
 CHUNK="${3:-100}"
 N="${4:-4}"
-SLDIR="$(dirname "$OUT")/_chunks"
+mkdir -p "$(dirname "$OUT")"
+# Absolute, so relative and absolute <out> paths both work below.
+SLDIR="$(cd "$(dirname "$OUT")" && pwd)/_chunks"
 PY="${PYTHON:-$HOME/venv/3d_cem/bin/python}"
 EVAL="$ROOT/ros2_ws/install/generated_objects_eval/bin/gazebo_stability_eval"
 
@@ -65,7 +67,7 @@ run_worker() {
           > "$SLDIR/world_${wid}.log" 2>&1 &
       local wpid=$!
       sleep 9
-      timeout 900 "$EVAL" --manifest "$ROOT/$cf" --out "$ROOT/$of" --max-objects 0 \
+      timeout 900 "$EVAL" --manifest "$cf" --out "$of" --max-objects 0 \
           > "$SLDIR/eval_${wid}.log" 2>&1
       kill -- -"$wpid" 2>/dev/null; sleep 1; kill -9 -- -"$wpid" 2>/dev/null; sleep 1
       nout=$(env -u PYTHONPATH "$PY" -c "import json,os;p='$of';print(len(json.load(open(p)).get('results',[])) if os.path.exists(p) else 0)" 2>/dev/null)

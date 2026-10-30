@@ -102,6 +102,10 @@ def _gazebo_per_method(blob):
     for e in blob["results"]:
         m = e["method"]
         agg[m]["n"] += 1
+        # "unsettled" = the harness read the object before the sim advanced
+        # (machine load); like a failed spawn it carries no stability verdict.
+        if e.get("reason") == "unsettled":
+            continue
         agg[m]["spawn"] += int(e.get("spawn_ok", False))
         agg[m]["stable"] += int(e.get("stable", False))
     return {m: s["stable"] / max(1, s["spawn"]) for m, s in agg.items()}
