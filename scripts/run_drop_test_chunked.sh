@@ -24,6 +24,8 @@ EVAL="$ROOT/ros2_ws/install/generated_objects_eval/bin/gazebo_stability_eval"
 # resolve (the eval binary is a console script that imports generated_objects_eval).
 source "${ROS_SETUP:-/opt/ros/jazzy/setup.bash}" 2>/dev/null
 source "$ROOT/ros2_ws/install/setup.bash" 2>/dev/null
+# Prefer the sourced distro's ros2 over any shim earlier on PATH.
+export PATH="/opt/ros/${ROS_DISTRO:-jazzy}/bin:$PATH"
 
 rm -rf "$SLDIR"; mkdir -p "$SLDIR"
 

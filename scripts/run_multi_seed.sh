@@ -27,6 +27,15 @@ case "$OUT_ROOT" in /*) ;; *) OUT_ROOT="$G_ROOT/$OUT_ROOT" ;; esac
 source /opt/ros/jazzy/setup.bash
 # shellcheck disable=SC1091
 source "$ROS_WS/install/setup.bash"
+# A `ros2` earlier on PATH (e.g. a shim in ~/.local/bin that forwards to a
+# remote/containerised graph) would run every `ros2 launch` below against
+# another distro and fail silently; use the sourced distro's CLI.
+export PATH="/opt/ros/${ROS_DISTRO:-jazzy}/bin:$PATH"
+if ! ros2 pkg prefix generated_objects_eval >/dev/null 2>&1; then
+    echo "ERROR: generated_objects_eval not found — build $ROS_WS first" \
+         "(colcon build) and check that 'ros2' is /opt/ros/<distro>/bin/ros2." >&2
+    exit 1
+fi
 
 # Isolate this run's ROS graph and gz transport from other users of the
 # machine. Override either variable to run several evaluations side by side.
