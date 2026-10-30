@@ -86,6 +86,12 @@ Numbers are only comparable within one configuration of
 | 10,433-variant drop study | single mesh | 0° | table top | wall clock |
 | v2.9 re-run (`aggregated_v29.json`) | per-primitive | 5° | table top | **sim time** |
 | v2.9 10k study (`gazebo_stability_v29.json`) | per-primitive | 5° | table top | **sim time** |
+| 10-seed study 2026-10-30 (`output/journal_10seed/`, seeds 42–51) | per-primitive | 5° | table top | sim time + `unsettled` excluded, fresh world per 25 objects; collision-aware MoveIt |
+
+The 10-seed study also carries MuJoCo results (`mujoco_eval*.json`, see `docs/PHYSICS_EVAL.md`).
+Its manifests, like every earlier result set, were built before the planner's surface sampling was
+seeded (commit df884e5), so their grasp lists are one draw of a sampler that varied run to run for
+the same seed; manifests built from df884e5 on reproduce.
 
 Note on the two 10k studies: the v2.9 study (10,494 objects, 76% stable) additionally uses
 the **tightened variant distribution** (recognizable ±12% variants, prototype-anchored) —
