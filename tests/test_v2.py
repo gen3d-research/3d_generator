@@ -384,3 +384,18 @@ def test_multitype_encoding_decodes_every_type():
         assert 1 <= len(obj.primitives) <= 4
         seen.update(p.ptype for p in obj.primitives)
     assert seen == {s.ptype for s in PRIMITIVE_SPECS}
+
+
+def test_concave_decomposition_splits_hollow_primitives(tmp_path):
+    import pytest
+    pytest.importorskip("coacd")
+    from archetypes import ARCHETYPE_REGISTRY
+    from export import ExportConfig, URDFExporter
+    counts = {}
+    for mode in ("hull", "coacd"):
+        cfg = ExportConfig(use_convex_hull=False, simplify_collision=False,
+                           concave_decomposition=mode)
+        paths = URDFExporter(cfg).export(ARCHETYPE_REGISTRY["pencil_cup"](),
+                                         tmp_path / mode, "pc")
+        counts[mode] = open(paths["sdf"]).read().count("<collision")
+    assert counts["coacd"] > counts["hull"]

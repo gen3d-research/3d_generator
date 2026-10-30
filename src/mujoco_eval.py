@@ -140,54 +140,13 @@ def parse_sdf(sdf_path: str | Path) -> dict:
     return out
 
 
-def _coacd_decompose(mesh_path: str, out_dir: str, threshold: float) -> None:
-    """Run CoACD and write parts. Called in a child process: CoACD can abort()
-    in C++ on some meshes, which must not take the caller down with it."""
-    import coacd
-    import trimesh
-    coacd.set_log_level("error")
-    mesh = trimesh.load(mesh_path, force="mesh")
-    last = None
-    for mode in ("auto", "on", "off"):
-        try:
-            pieces = coacd.run_coacd(coacd.Mesh(mesh.vertices, mesh.faces),
-                                     threshold=threshold, preprocess_mode=mode)
-            break
-        except Exception as e:     # noqa: BLE001
-            last = e
-    else:
-        raise RuntimeError(f"coacd failed: {last}")
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    for i, (v, f) in enumerate(pieces):
-        trimesh.Trimesh(v, f).export(out / f"part_{i:03d}.obj")
-
-
 def coacd_geoms(visual_mesh: str | Path, threshold: float = 0.05) -> list[dict]:
     """Convex decomposition of the true (visual) mesh, cached on disk next to
     it as ``coacd_<threshold>/part_<i>.obj``. Raises if CoACD fails."""
-    import os
-    import shutil
-    import subprocess
-    import sys
+    from convex_decomp import decompose_file
     visual_mesh = Path(visual_mesh)
-    cache = visual_mesh.parent / f"coacd_{threshold:g}"
-    parts = sorted(cache.glob("part_*.obj")) if cache.is_dir() else []
-    if not parts:
-        tmp = cache.with_name(f"{cache.name}.tmp{os.getpid()}")
-        shutil.rmtree(tmp, ignore_errors=True)
-        env = dict(os.environ, OMP_NUM_THREADS="1")
-        r = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--coacd",
-                            str(visual_mesh), str(tmp), str(threshold)],
-                           capture_output=True, env=env, timeout=600)
-        if r.returncode != 0 or not any(tmp.glob("part_*.obj")):
-            shutil.rmtree(tmp, ignore_errors=True)
-            raise RuntimeError(f"coacd failed (exit {r.returncode})")
-        try:
-            tmp.rename(cache)                 # atomic publish
-        except OSError:                       # a racing worker won; use its parts
-            shutil.rmtree(tmp, ignore_errors=True)
-        parts = sorted(cache.glob("part_*.obj"))
+    parts = decompose_file(visual_mesh, visual_mesh.parent / f"coacd_{threshold:g}",
+                           threshold)
     return [{"kind": "mesh", "file": str(p.resolve()), "pos": [0.0, 0.0, 0.0],
              "quat": [1.0, 0.0, 0.0, 0.0]} for p in parts]
 
@@ -524,8 +483,3 @@ def evaluate_entry(entry: dict, cfg: MujocoEvalConfig | None = None,
 def config_dict(cfg: MujocoEvalConfig) -> dict:
     return asdict(cfg)
 
-
-if __name__ == "__main__":     # child-process entry for coacd_geoms
-    import sys
-    if len(sys.argv) == 5 and sys.argv[1] == "--coacd":
-        _coacd_decompose(sys.argv[2], sys.argv[3], float(sys.argv[4]))

@@ -27,6 +27,11 @@ def _rpy_from_matrix(R: np.ndarray):
     return Rotation.from_matrix(np.asarray(R, dtype=float)).as_euler('xyz')
 
 
+# Primitive types whose single convex hull fills a cavity, slot or gap.
+_CONCAVE_TYPES = {PrimitiveType.HOLLOW_SHELL, PrimitiveType.OPEN_TUBE, PrimitiveType.TORUS,
+                  PrimitiveType.HANDLE, PrimitiveType.GEAR_PRISM, PrimitiveType.EXTRUDED_PROFILE}
+
+
 @dataclass
 class ExportConfig:
     """Configuration for URDF/SDF export."""
@@ -49,6 +54,13 @@ class ExportConfig:
     # collision-mesh OBJ is still written for MoveIt planning-scene use.
     # Set False for the legacy single-mesh collision.
     per_primitive_collision: bool = True
+    # How per-primitive collision represents the CONCAVE types (hollow shell,
+    # open tube, torus, handle, gear, L/U/T/I profile): "hull" (default) = one
+    # convex hull each, so a cup is solid and a finger cannot enter it;
+    # "coacd" = a CoACD convex decomposition of that primitive (keeps the
+    # cavity; needs `pip install coacd`; falls back to the hull on failure).
+    concave_decomposition: str = "hull"
+    coacd_threshold: float = 0.05
 
     # Inertia computation. v2 default (True) computes overlap-aware
     # mass/COM/inertia from the boolean-union solid (correct for overlapping
@@ -178,6 +190,29 @@ class URDFExporter:
             'metadata': metadata_path
         }
     
+    def _decompose_piece(self, piece, meshes_dir: Path, stem: str, ext: str) -> list:
+        """CoACD pieces of one concave primitive as identity-pose mesh entries
+        (``meshes/<stem>_<j>.<ext>``); [] if the decomposition fails."""
+        import shutil
+        import tempfile
+        from convex_decomp import decompose_file
+        tmp = Path(tempfile.mkdtemp(prefix="coacd_"))
+        try:
+            src = tmp / "piece.obj"
+            piece.export(src)
+            parts = decompose_file(src, tmp / "parts", self.config.coacd_threshold)
+            out = []
+            for j, part in enumerate(parts):
+                rel = f"meshes/{stem}_{j}.{ext}"
+                trimesh.load(part, force="mesh").export(meshes_dir / f"{stem}_{j}.{ext}",
+                                                        include_normals=True)
+                out.append({"kind": "mesh", "uri": rel, "R": np.eye(3), "t": np.zeros(3)})
+            return out
+        except Exception:
+            return []
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def _collision_entries(self, obj: CompositeObject, name: str,
                            meshes_dir: Path, ext: str) -> list:
         """Decompose the object into per-primitive collision entries.
@@ -217,6 +252,12 @@ class URDFExporter:
                                     "R": np.eye(3), "t": c})
             else:
                 piece = p.to_mesh()
+                if (self.config.concave_decomposition == "coacd"
+                        and k in _CONCAVE_TYPES):
+                    parts = self._decompose_piece(piece, meshes_dir, f"{name}_col{i}", ext)
+                    if parts:
+                        entries += parts
+                        continue
                 try:
                     piece = piece.convex_hull
                 except Exception:
