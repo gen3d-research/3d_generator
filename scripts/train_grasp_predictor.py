@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -33,7 +34,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-SCALE = 0.1  # metres -> network units
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+# numpy-only feature code shared with the inference module
+from grasp_predictor import (SCALE, grasp_frames as _frames,  # noqa: E402
+                             local_points, scalar_features)
 
 
 # ---------------------------------------------------------------------------
@@ -59,28 +65,15 @@ def load(paths: list[Path]) -> dict:
 
 
 def grasp_frames(D: dict) -> np.ndarray:
-    z = D["g_approach"] / np.linalg.norm(D["g_approach"], axis=1, keepdims=True)
-    y = D["g_axis"] - np.sum(D["g_axis"] * z, axis=1, keepdims=True) * z
-    y /= np.linalg.norm(y, axis=1, keepdims=True) + 1e-12
-    x = np.cross(y, z)
-    return np.stack([x, y, z], axis=2)          # [n, 3, 3], columns = axes
+    return _frames(D["g_approach"], D["g_axis"])         # [n, 3, 3], columns = axes
 
 
 def features(D: dict) -> tuple[np.ndarray, np.ndarray]:
     """Per-grasp scalar features (float32) and frames."""
     R = grasp_frames(D)
-    c = D["g_center"]
     o = D["g_obj"]
-    com = np.einsum("nji,nj->ni", R, D["obj_com"][o] - c) / SCALE
-    up = np.einsum("nji,j->ni", R, np.array([0.0, 0.0, 1.0]))
-    S = np.column_stack([
-        D["g_width"] / 0.08,
-        np.log(D["obj_mass"][o]),
-        com, up,
-        c[:, 2] / SCALE,
-        D["g_score"],
-        D["obj_extents"][o] / SCALE,
-    ]).astype(np.float32)
+    S = scalar_features(R, D["g_center"], D["g_width"], D["g_score"],
+                        D["obj_mass"][o], D["obj_com"][o], D["obj_extents"][o])
     return S, R.astype(np.float32)
 
 
@@ -127,12 +120,29 @@ def batch_points(D, idx, R, rng=None, n_pts=256, device="cpu"):
         sel = np.broadcast_to(np.linspace(0, P.shape[1] - 1, n_pts).astype(int),
                               (len(idx), n_pts))
     P = np.take_along_axis(P, sel[..., None], axis=1)
-    local = np.einsum("bji,bpj->bpi", R[idx], P - D["g_center"][idx][:, None, :]) / SCALE
+    local = local_points(P, R[idx], D["g_center"][idx])
     if rng is not None:                                      # finger-swap symmetry
         flip = rng.random(len(idx)) < 0.5
         local[flip, :, :2] *= -1
     return torch.from_numpy(np.ascontiguousarray(local.transpose(0, 2, 1),
                                                  dtype=np.float32)).to(device)
+
+
+def export_numpy(model: GraspNet, mu, sd, path: Path) -> None:
+    """BatchNorm folded into the 1x1 convs; loads with grasp_predictor.GraspPredictor."""
+    sd_ = {k: v.detach().cpu().numpy() for k, v in model.state_dict().items()}
+    out = {"mu": mu.astype(np.float32), "sd": sd.astype(np.float32)}
+    for i, (conv, bn) in enumerate([(0, 1), (3, 4), (6, 7)]):
+        W = sd_[f"point.{conv}.weight"][:, :, 0]
+        b = sd_[f"point.{conv}.bias"]
+        g = sd_[f"point.{bn}.weight"] / np.sqrt(sd_[f"point.{bn}.running_var"] + 1e-5)
+        out[f"point{i}_W"] = (W * g[:, None]).astype(np.float32)
+        out[f"point{i}_b"] = ((b - sd_[f"point.{bn}.running_mean"]) * g
+                              + sd_[f"point.{bn}.bias"]).astype(np.float32)
+    for i, lin in enumerate((0, 3, 5)):
+        out[f"head{i}_W"] = sd_[f"head.{lin}.weight"].astype(np.float32)
+        out[f"head{i}_b"] = sd_[f"head.{lin}.bias"].astype(np.float32)
+    np.savez(path, **out)
 
 
 def auc(score: np.ndarray, y: np.ndarray) -> float:
@@ -267,6 +277,15 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     torch.save({"state_dict": model.state_dict(), "mu": mu, "sd": sd,
                 "n_scalar": S.shape[1]}, args.out / "model.pt")
+    export_numpy(model, mu, sd, args.out / "model.npz")
+    # parity check: the numpy export must reproduce torch's test predictions
+    from grasp_predictor import GraspPredictor
+    gp = GraspPredictor(args.out / "model.npz")
+    k = te[:512]
+    P = D["obj_points"][D["g_obj"][k]]
+    P = P[:, np.linspace(0, P.shape[1] - 1, 256).astype(int)]
+    p_np = 1 / (1 + np.exp(-gp.logits(local_points(P, R[k], D["g_center"][k]), S[k])))
+    res["numpy_export_max_abs_diff"] = float(np.abs(p_np - p_te[:len(k)]).max()) if len(k) else 0.0
     (args.out / "results.json").write_text(json.dumps(res, indent=1))
     print(json.dumps({k: res[k] for k in ("test_lift_rate", "test_auc", "test_rank1")}, indent=1))
 
