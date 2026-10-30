@@ -45,6 +45,23 @@ def _baseline_objects(name: str, top_k: int, budget: int, seed: int):
     return r.objects
 
 
+def _rank_by_model(model, obj, grasps, seed):
+    """Order grasps by the learned predictor's lift probability (stored as
+    p_success); returns (grasps, best probability)."""
+    import trimesh
+    mesh = obj.to_mesh()
+    pts, _ = trimesh.sample.sample_surface(mesh, 512, seed=seed)
+    try:
+        mass, _, com = obj.mesh_mass_properties(1000.0)
+    except Exception:
+        mass, com = obj.total_volume() * 1000.0, obj.center_of_mass(1000.0)
+    p = model.predict(pts, float(mass), com, np.ptp(mesh.vertices, axis=0), grasps)
+    for g, pi in zip(grasps, p):
+        g["p_success"] = float(pi)
+    order = np.argsort(-p, kind="stable")
+    return [grasps[i] for i in order], float(p.max())
+
+
 def _serialise_grasps(grasps, max_keep=5):
     out = []
     for g in grasps[:max_keep]:
@@ -86,7 +103,18 @@ def main():
                    help="Drop grasps whose hand body would reach below the table "
                         "(grasp_planner.hand_clears_table). Off by default so "
                         "published manifests reproduce.")
+    p.add_argument("--grasp-model", type=Path, default=None,
+                   help="model.npz from train_grasp_predictor.py: order each object's "
+                        "grasps by predicted physical lift success (stored as p_success)")
+    p.add_argument("--cem-pool", type=int, default=1,
+                   help="CEM generates POOL x top-k objects; with --grasp-model the "
+                        "top-k whose best grasp has the highest predicted success "
+                        "are kept (physics-aware selection), else the first top-k")
     args = p.parse_args()
+    model = None
+    if args.grasp_model:
+        from grasp_predictor import GraspPredictor
+        model = GraspPredictor(args.grasp_model)
 
     # Mesh collision (not convex hull, not simplified) so the object's collision
     # matches its visual mesh exactly and rests flush on the table in gz.
@@ -95,16 +123,27 @@ def main():
     for method in args.methods:
         print(f"[{method}] generating top-{args.top_k} objects ...")
         if method == "cem":
-            objs = _cem_objects(args.top_k, args.budget, args.seed)
+            objs = _cem_objects(args.top_k * max(1, args.cem_pool), args.budget, args.seed)
         else:
             objs = _baseline_objects(method, args.top_k, args.budget, args.seed)
+        # Plan (and optionally score) grasps for every candidate, then select.
+        cands = []
         for k, obj in enumerate(objs):
-            obj.name = f"{method}_{k:04d}"
-            obj_dir = args.export_root / method / obj.name
-            paths = exporter.export(obj, obj_dir, obj.name)
             report = plan_grasps(obj, GripperSpec(), n_surface=256,
                                  max_pairs=1500, max_returned=args.n_grasps,
                                  seed=args.seed + k, table_check=args.table_check)
+            grasps = _serialise_grasps(report.grasps, args.n_grasps)
+            best = -1.0
+            if model is not None and grasps:
+                grasps, best = _rank_by_model(model, obj, grasps, args.seed + k)
+            cands.append((obj, report, grasps, best))
+        if method == "cem" and args.cem_pool > 1 and model is not None:
+            cands = sorted(cands, key=lambda c: c[3], reverse=True)
+        cands = cands[:args.top_k]
+        for k, (obj, report, grasps, best) in enumerate(cands):
+            obj.name = f"{method}_{k:04d}"
+            obj_dir = args.export_root / method / obj.name
+            paths = exporter.export(obj, obj_dir, obj.name)
             # Mass + center of mass (object frame) so the demo can (a) auto-size
             # the closing force and (b) prefer grasps near the CoM.
             try:
@@ -134,7 +173,7 @@ def main():
                 "com": list(map(float, com)),
                 "aabb": aabb,
                 "extents": extents,
-                "grasps": _serialise_grasps(report.grasps, args.n_grasps),
+                "grasps": grasps,
                 "n_grasps_synth": len(report.grasps),
             })
 
