@@ -44,11 +44,15 @@ echo "[drop] $(basename "$MAN"): $NCH chunks of $CHUNK across $N workers"
 export GZ_SVC_TIMEOUT_MS="${GZ_SVC_TIMEOUT_MS:-15000}"
 export GZ_SVC_SUBPROC_S="${GZ_SVC_SUBPROC_S:-20}"
 export GZ_ABORT_AFTER_FAILS="${GZ_ABORT_AFTER_FAILS:-5}"
-pkill -KILL -f "gz sim -s -r" 2>/dev/null; sleep 2
+# Workers get partitions "<base>_drop<i>"; the base defaults to gen3d so runs
+# never share gz transport with other sessions on the machine.
+GZ_BASE="${GZ_PARTITION:-gen3d}"
 
 run_worker() {
   local wid=$1
-  export GZ_PARTITION="drop${wid}" ROS_DOMAIN_ID=$((90+wid)) RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+  # The drop evaluator talks to gz only (no ROS graph), so every worker can share
+  # one ROS_DOMAIN_ID; gz isolation comes from the per-worker partition.
+  export GZ_PARTITION="${GZ_BASE}_drop${wid}" ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-23}" RMW_IMPLEMENTATION=rmw_fastrtps_cpp
   local j=$wid
   while [ "$j" -lt "$NCH" ]; do
     local jj; jj=$(printf %04d "$j")
@@ -72,7 +76,6 @@ run_worker() {
 
 for wid in $(seq 0 $((N-1))); do run_worker "$wid" & done
 wait
-pkill -KILL -f "gz sim -s -r" 2>/dev/null
 
 env -u PYTHONPATH "$PY" - "$SLDIR" "$OUT" <<'PYEOF'
 import json,glob,sys

@@ -13,6 +13,7 @@ Run from 3d_generator/ (gz sim must be installed):
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -63,7 +64,9 @@ def build_manifest(seeds, n, iters, out_dir):
 
 
 def launch_world():
-    subprocess.run(["pkill", "-f", "gz sim"], capture_output=True)
+    # Own gz partition instead of `pkill -f "gz sim"`, which would also kill
+    # every other Gazebo session on the machine.
+    os.environ.setdefault("GZ_PARTITION", "gen3d")
     proc = subprocess.Popen(
         ["gz", "sim", "-s", "-r", "-v", "1", str(WORLD)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -110,7 +113,10 @@ def main():
             results.append(r)
     finally:
         proc.terminate()
-        subprocess.run(["pkill", "-f", "gz sim"], capture_output=True)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
     # per (method, seed) stable-rate
     by = defaultdict(lambda: {"spawn": 0, "stable": 0})

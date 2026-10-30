@@ -23,18 +23,34 @@ source /opt/ros/jazzy/setup.bash
 # shellcheck disable=SC1091
 source "$ROS_WS/install/setup.bash"
 
+# Isolate this run's ROS graph and gz transport from other users of the
+# machine. Override either variable to run several evaluations side by side.
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-23}"
+export GZ_PARTITION="${GZ_PARTITION:-gen3d}"
+
+# Kill only OUR processes: those matching the pattern whose environment carries
+# this run's GZ_PARTITION. A bare `pkill -f robot_state_publisher` / `gz sim`
+# also kills every other ROS/Gazebo session on a shared machine.
+kill_own() {
+    local p
+    for p in $(pgrep -f "$1"); do
+        [ "$p" = "$$" ] && continue
+        tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null \
+            | grep -qx "GZ_PARTITION=$GZ_PARTITION" && kill -KILL "$p" 2>/dev/null
+    done
+}
+
 cleanup() {
     # gz transport advertises services by world name; stale gz_sim instances
-    # from previous runs steal entity-factory calls non-deterministically.
-    # PRECISE pattern: the broad "gz sim" matches any process whose command
-    # line merely contains the string (other sessions, even shells).
-    pkill -KILL -f "gz sim -s -r" 2>/dev/null
-    pkill -KILL -f "gazebo_stability_eval" 2>/dev/null
-    pkill -KILL -f "moveit_planning_eval" 2>/dev/null
-    pkill -KILL -f "home_joint_state_publisher" 2>/dev/null
-    pkill -KILL -f "robot_state_publisher" 2>/dev/null
-    pkill -KILL -f "ros2 launch.*stability_world" 2>/dev/null
-    pkill -KILL -f "ros2 launch.*moveit_planning_eval" 2>/dev/null
+    # from previous runs (same partition) steal entity-factory calls
+    # non-deterministically.
+    kill_own "gz sim -s -r"
+    kill_own "gazebo_stability_eval"
+    kill_own "moveit_planning_eval"
+    kill_own "home_joint_state_publisher"
+    kill_own "robot_state_publisher"
+    kill_own "ros2 launch.*stability_world"
+    kill_own "ros2 launch.*moveit_planning_eval"
     sleep 2
 }
 
@@ -71,7 +87,7 @@ for SEED in "$@"; do
         # The moveit_py shutdown segfaults *after* the JSON is written, but
         # the ros2 launch parent waits 15 min for the orphan children to die.
         # Spawn the launch, poll for the result file, then kill the launch.
-        ros2 launch generated_objects_eval moveit_planning_eval.launch.py \
+        setsid ros2 launch generated_objects_eval moveit_planning_eval.launch.py \
             manifest:="$MANIFEST" out:="$MOVEIT" max_objects:=0 \
             > "$SEED_DIR/moveit.log" 2>&1 &
         LAUNCH_PID=$!
@@ -86,25 +102,26 @@ for SEED in "$@"; do
                 break
             fi
         done
-        pkill -KILL -f "moveit_planning_eval" 2>/dev/null
-        pkill -KILL -f "home_joint_state_publisher" 2>/dev/null
-        pkill -KILL -f "robot_state_publisher" 2>/dev/null
-        pkill -KILL -P "$LAUNCH_PID" 2>/dev/null
-        kill -KILL "$LAUNCH_PID" 2>/dev/null
+        # setsid made the launch its own process group: kill the whole group.
+        kill -KILL -- -"$LAUNCH_PID" 2>/dev/null
+        kill_own "moveit_planning_eval"
+        kill_own "home_joint_state_publisher"
+        kill_own "robot_state_publisher"
         wait "$LAUNCH_PID" 2>/dev/null
         sleep 2
     fi
 
     if [ ! -s "$GAZEBO" ]; then
         echo "[$SEED] Gazebo stability eval"
-        ros2 launch generated_objects_eval stability_world.launch.py \
+        setsid ros2 launch generated_objects_eval stability_world.launch.py \
             > "$SEED_DIR/gz_world.log" 2>&1 &
+        WORLD_PID=$!
         sleep 6
         timeout 900 "$ROS_WS/install/generated_objects_eval/bin/gazebo_stability_eval" \
             --manifest "$MANIFEST" --out "$GAZEBO" --max-objects 0 \
             > "$SEED_DIR/gazebo.log" 2>&1 || true
-        pkill -f "ros2 launch.*stability" 2>/dev/null || true
-        pkill -f "gz sim -s -r" 2>/dev/null || true
+        kill -KILL -- -"$WORLD_PID" 2>/dev/null
+        kill_own "gz sim -s -r"
         sleep 2
     fi
 
