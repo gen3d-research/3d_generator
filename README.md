@@ -147,7 +147,9 @@ the planner's ranked grasps, skips infeasible ones (too wide, approaching from b
 already intersecting the table at the pre-grasp), executes up to three, and counts a success
 when the object rises at least 7 cm with both pads still touching it (μ = 0.5, 20 N per finger).
 `--collision sdf` uses the exported collision set (what Gazebo sees, with concave primitives
-hulled); `--collision coacd` uses a CoACD decomposition of the true mesh.
+hulled); `--collision coacd` uses a CoACD decomposition of the true mesh. The protocol, the
+physics-labelled grasp dataset and the learned grasp-success predictor built on it are documented
+in [`docs/PHYSICS_EVAL.md`](docs/PHYSICS_EVAL.md).
 
 ## How It Works
 
