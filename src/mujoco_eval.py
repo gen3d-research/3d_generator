@@ -245,12 +245,15 @@ def build_mjcf(obj: dict, cfg: MujocoEvalConfig, gripper: bool) -> str:
   <option timestep="{cfg.timestep}" cone="elliptic" impratio="10" integrator="implicitfast"/>
   <visual><headlight ambient="0.35 0.35 0.35" diffuse="0.65 0.65 0.65"/></visual>
   <default>
-    <!-- Stiff contacts/limits: MuJoCo's default soft constraint (timeconst
-         0.02 s) lets a 20 N grip drive pads centimetres into a 50 g object. -->
-    <geom friction="{mu} 0.005 0.0001" condim="4" solref="{2 * cfg.timestep} 1"/>
+    <!-- Object and table keep MuJoCo's default contact (no rebound: a stiff
+         contact bounces a 5 cm drop ~2 cm and topples stable objects). The
+         pads alone are stiff, via priority: the default soft constraint lets
+         a 20 N grip drive pads centimetres into a 50 g object. -->
+    <geom friction="{mu} 0.005 0.0001" condim="4"/>
     <joint solreflimit="{2 * cfg.timestep} 1"/>
     <default class="obj"><geom condim="4" density="0" rgba="0.33 0.55 0.85 1"/></default>
-    <default class="grip"><geom condim="4" density="0" rgba="0.95 0.55 0.2 1"/></default>
+    <default class="grip"><geom condim="4" density="0" rgba="0.95 0.55 0.2 1"
+                                priority="1" solref="{2 * cfg.timestep} 1"/></default>
   </default>
   <asset>{''.join(assets)}</asset>
   <worldbody>
@@ -412,11 +415,12 @@ def pick_and_lift(obj: dict, grasps: list[dict], cfg: MujocoEvalConfig,
     p_o = d.xpos[sim.obj_b].copy()
     R_o = d.xmat[sim.obj_b].reshape(3, 3).copy()
 
-    trials, skipped = [], {}
+    trials, skipped, infeasible = [], {}, []
 
     def skip(rec, why):            # infeasible: not executed, not a trial
         trials.remove(rec)
         skipped[why] = skipped.get(why, 0) + 1
+        infeasible.append({"rank": rec["rank"], "reason": why})
 
     for gi, g in enumerate(grasps):
         if len(trials) >= cfg.grasps_per_object:
@@ -489,7 +493,8 @@ def pick_and_lift(obj: dict, grasps: list[dict], cfg: MujocoEvalConfig,
     succ = [t.get("success", False) for t in trials]
     return {"has_feasible": bool(trials), "lift_first": bool(succ[0]) if succ else False,
             "lift_any": bool(any(succ)), "n_executed": len(trials),
-            "n_planned": len(grasps), "skipped": skipped, "trials": trials}
+            "n_planned": len(grasps), "skipped": skipped, "infeasible": infeasible,
+            "trials": trials}
 
 
 def evaluate_entry(entry: dict, cfg: MujocoEvalConfig | None = None,

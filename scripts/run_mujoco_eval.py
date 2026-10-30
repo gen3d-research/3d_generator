@@ -58,7 +58,7 @@ def _work(entry: dict) -> dict:
 
 
 def run_manifest(manifest: Path, out: Path, cfg: MujocoEvalConfig, lift: bool,
-                 workers: int) -> dict:
+                 workers: int, gazebo: Path | None = None) -> dict:
     entries = json.loads(manifest.read_text())
     t0 = time.time()
     with ProcessPoolExecutor(max_workers=workers, initializer=_init,
@@ -67,15 +67,14 @@ def run_manifest(manifest: Path, out: Path, cfg: MujocoEvalConfig, lift: bool,
     doc = {"manifest": str(manifest), "config": config_dict(cfg), "lift": lift,
            "wall_s": time.time() - t0, "summary": summarize(results),
            "results": results}
-    attach_gazebo(doc, manifest.parent)
+    attach_gazebo(doc, gazebo or manifest.parent / "gazebo_stability.json")
     out.write_text(json.dumps(doc, indent=1))
     return doc
 
 
-def attach_gazebo(doc: dict, seed_dir: Path) -> None:
-    """(Re)compute the MuJoCo-vs-Gazebo drop agreement from the Gazebo result
-    next to the manifest, if there is one (it may land after the MuJoCo run)."""
-    gz_path = seed_dir / "gazebo_stability.json"
+def attach_gazebo(doc: dict, gz_path: Path) -> None:
+    """(Re)compute the MuJoCo-vs-Gazebo drop agreement from a Gazebo result
+    file, if it exists (it may land after the MuJoCo run)."""
     if gz_path.exists():
         doc["summary"]["gazebo_agreement"] = gazebo_agreement(
             doc["results"], json.loads(gz_path.read_text()).get("results", []))
@@ -207,6 +206,8 @@ def main() -> None:
     ap.add_argument("--root", type=Path, help="dir holding seed_<seed>/eval_manifest.json")
     ap.add_argument("--seeds", type=int, nargs="+")
     ap.add_argument("--manifest", type=Path)
+    ap.add_argument("--gazebo", type=Path, help="Gazebo drop results to compare against "
+                    "(with --manifest; default <manifest dir>/gazebo_stability.json)")
     ap.add_argument("--out", type=Path, help="per-manifest output (with --manifest), "
                     "or the aggregate JSON (with --root; default "
                     "<root>/mujoco_aggregated[_<tag>].json)")
@@ -227,7 +228,7 @@ def main() -> None:
 
     if args.manifest:
         out = args.out or args.manifest.parent / f"mujoco_eval{sfx}.json"
-        doc = run_manifest(args.manifest, out, cfg, lift, args.workers)
+        doc = run_manifest(args.manifest, out, cfg, lift, args.workers, args.gazebo)
         print(json.dumps(doc["summary"], indent=1))
         print(f"wrote {out} ({doc['wall_s']:.0f}s)")
         return
@@ -240,7 +241,7 @@ def main() -> None:
         out = d / f"mujoco_eval{sfx}.json"
         if out.exists() and not args.rerun:
             doc = json.loads(out.read_text())
-            attach_gazebo(doc, d)
+            attach_gazebo(doc, d / "gazebo_stability.json")
             per_seed[seed] = doc
             print(f"[seed {seed}] cached {out}")
             continue
