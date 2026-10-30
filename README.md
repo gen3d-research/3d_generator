@@ -1,68 +1,84 @@
 # Robotic Object Generator
 
-**Generative 3D Object Modeling for Robust Robot Manipulation in ROS 2**
+**Generative 3D Object Modeling for Robust Robot Manipulation in ROS 2**: accepted and
+presented at IEEE ICARM 2026 (Paris, 21–23 July 2026; proceedings forthcoming).
+Project page: <https://gen3d-research.github.io/3d_generator/>
 
-A lightweight, dataset-free framework for generating diverse 3D objects suitable for robotic manipulation. Objects are scored on robotics-relevant criteria (stability, graspability, size) and the generator learns to produce high-quality objects using the Cross-Entropy Method.
+A lightweight, dataset-free framework for generating diverse 3D objects suitable for robotic
+manipulation. Objects are scored on robotics-relevant criteria (stability, graspability, size),
+and the generator learns to produce high-quality objects with the Cross-Entropy Method.
+
+> **Which code is which.** `main` is **v2**, the post-paper system (19 primitive types, 105
+> archetypes, connected-by-construction sampling, mesh-union inertia, grasp re-ranking,
+> per-primitive collision export, collision-aware MoveIt, MuJoCo cross-simulator evaluation).
+> The exact code behind the ICARM paper is on the branch **`legacy/v1-icarm`**;
+> `generator.paper_repro_generator()` reproduces the v1 configuration from v2 code. What
+> changed and why is in [`DISCREPANCIES.md`](DISCREPANCIES.md) and
+> [`docs/SIM_NOTES.md`](docs/SIM_NOTES.md).
 
 ## Key Features
 
-- **No external datasets required** — self-contained training loop
-- **No neural networks/LLMs** — pure optimization (fast, interpretable)
-- **Robotics-first scoring** — stability, graspability, feasible size
-- **Direct ROS 2 integration** — exports URDF/SDF with physical properties
-- **Lightweight** — runs on CPU, no GPU needed
+- **No external datasets required**: self-contained training loop
+- **No neural networks/LLMs**: pure optimization (fast, interpretable)
+- **Robotics-first scoring**: stability, graspability, feasible size
+- **Direct ROS 2 integration**: exports URDF/SDF with physical properties
+- **Lightweight**: generation runs on CPU, no GPU needed
 
 ## Installation
 
-The project targets Python 3.10+. We keep the virtual environment outside the
-repo so build artefacts don't churn it:
+The generator targets Python 3.10+ (developed on 3.12). Keep the virtual environment outside
+the repo so build artefacts don't churn it:
 
 ```bash
-# 1. Create a dedicated venv (one-off):
-python3 -m venv ~/venv/3d_cem
-
-# 2. Activate it (every shell):
-source ~/venv/3d_cem/bin/activate
-
-# 3. Install the Python dependencies:
-pip install -r requirements.txt
+python3 -m venv ~/venv/3d_cem          # one-off
+source ~/venv/3d_cem/bin/activate      # every shell
+pip install -r requirements.txt        # numpy, scipy, trimesh, manifold3d, cma, mujoco, coacd, ...
 ```
 
-After activation, all `python main.py …` and `python scripts/…` invocations
-below will pick up the right NumPy / matplotlib / trimesh / cma versions.
+There is no package install: every command below runs **from `3d_generator/`**. The CLI and
+the scripts put `src/` on `sys.path` themselves, and the modules import each other flat
+(`from generator import ...`).
+
+Tests (170, about 10 s). Clear `PYTHONPATH` so a sourced ROS 2 doesn't inject pytest plugins:
+
+```bash
+env -u PYTHONPATH python -m pytest
+```
+
+The ROS 2 evaluation package (MoveIt 2 + Gazebo Harmonic, needs ROS 2 **Jazzy**) builds
+separately:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ros2_ws && colcon build && cd ..
+source ros2_ws/install/setup.bash
+```
+
+It needs `moveit_py`, `moveit_resources_panda_moveit_config`, `ros_gz_sim`, `gz_ros2_control`
+and `parallel_gripper_controller` from apt (see `ros2_ws/src/generated_objects_eval/package.xml`).
 
 ## Quick Start
+
+### Command line
+
+```bash
+python src/main.py demo                                      # ~30 s sanity check
+python src/main.py generate -n 100 -o output/objects --train --iterations 50
+python src/main.py archetypes -o output/archetypes           # all 105 archetypes -> URDF/SDF
+python src/main.py score path/to/mesh.obj                    # score an arbitrary mesh (bbox proxy)
+```
 
 ### Python API
 
 ```python
+import sys; sys.path.insert(0, "src")      # from 3d_generator/
 from generator import RoboticObjectGenerator
 
-# Create generator and train
 gen = RoboticObjectGenerator()
 gen.train(n_iterations=30, verbose=True)
-
-# Generate objects
 objects = gen.generate(n=50)
-
-# Export to URDF/SDF for Gazebo/MoveIt
-gen.export_all(objects, "output/objects")
-
-# Save trained generator for reuse
+gen.export_all(objects, "output/objects")  # URDF + SDF + meshes + metadata
 gen.save("trained_generator.json")
-```
-
-### Command Line
-
-```bash
-# Generate 100 objects with training
-python main.py generate -n 100 -o output/objects --train --iterations 50
-
-# Quick demo
-python main.py demo
-
-# Generate standard archetype objects
-python main.py archetypes -o output/archetypes
 ```
 
 The repo can produce objects **12 different ways** (archetype-raw, archetype-CEM, random,
@@ -83,45 +99,63 @@ python scripts/gen_strategies.py --strategy all  # constrained generation sweeps
 python scripts/render_archetype_varieties.py --subset --combined  # CEM-trained varieties per archetype
 ```
 
-➡️ **[`GUIDE.md`](GUIDE.md) is the one-stop walkthrough** — generate/train → visualize →
-**drop test** and **pick-and-place** in ROS 2 / Gazebo on the generated parts.
+## Evaluation
 
-### Reproducing Paper Results
-
-`REPRODUCE.md` walks through every cell of Table I end-to-end (≈ 30 minutes on a
-single CPU). Quick reference:
+Five generators (CEM, Fixed CAD, CMA-ES, random search, GA) are compared on metrics computed
+by code paths independent of the CEM's own score. `REPRODUCE.md` walks through every cell of
+the paper's Table I. The multi-seed pipeline:
 
 ```bash
-# 1. Per-seed manifest (5 methods × top-25 objects each)
-python3 scripts/build_eval_manifest.py --budget 1500 --top-k 25 --seed 42 \
-    --out output/seed_42/eval_manifest.json
-python3 scripts/patch_sdf_collision.py --manifest output/seed_42/eval_manifest.json
+# On a shared machine, isolate the ROS graph and gz transport (these are the defaults):
+export ROS_DOMAIN_ID=23 GZ_PARTITION=gen3d
 
-# 2. All three seeds, all three downstream metrics:
-bash scripts/run_multi_seed.sh 42 43 44
+# Per seed: manifest (5 methods x top-25 objects + grasps) -> unified Python eval
+# (force-closure grasp synthesis, diversity) -> MoveIt 2 planning -> Gazebo drop test.
+# Each stage is skipped when its JSON exists; OUT_ROOT picks a fresh result set.
+OUT_ROOT=output/my_study bash scripts/run_multi_seed.sh 42 43 44
 
-# 3. Aggregate into the paper's table:
-python3 scripts/aggregate_seeds.py 42 43 44 --out output/aggregated.json
-cp output/aggregated.json docs/data/results.json    # refresh project page
+# Aggregate: mean, sample std, 95% t-CI, paired Wilcoxon CEM vs best rival.
+python scripts/aggregate_seeds.py 42 43 44 --root output/my_study --out output/my_study/aggregated.json
 
-# 4. 20-archetype large-scale study (long: ~1 h):
-python3 scripts/run_scale_experiment.py -n 10000 --iterations 30 --train
-
-# 5. The pick-and-place demo (gz_sim + RViz, full physics):
-ros2 launch generated_objects_eval visual_demo.launch.py use_gz_control:=true
+# Cross-simulator check in MuJoCo (no ROS): drop test + physics pick-and-lift, seconds per seed.
+python scripts/run_mujoco_eval.py --root output/my_study --seeds 42 43 44
+python scripts/run_mujoco_eval.py --root output/my_study --seeds 42 43 44 --collision coacd
 ```
 
-Two knobs control how many objects flow through the pipeline:
+`run_multi_seed.sh` kills only processes carrying its own `GZ_PARTITION`, and calls
+`/opt/ros/$ROS_DISTRO/bin/ros2` even if another `ros2` is earlier on `PATH`. A seed takes about
+7 min of Python (the five methods' 1,500-object budgets) plus a few minutes of MoveIt and
+Gazebo. Seeds can run their Python stages in parallel; the ROS stages share one domain, so run
+those one seed at a time.
 
-- `--top-k K` on `build_eval_manifest.py` — number of objects per method in
-  the manifest (and therefore the demo + the downstream evaluators).
-- `--budget N` on `build_eval_manifest.py` — number of candidate objects each
-  method evaluates before selecting elites.
+Other entry points:
+
+```bash
+python3 scripts/run_scale_experiment.py -n 10000 --iterations 30 --train   # archetype study (~1 h)
+ros2 launch generated_objects_eval visual_demo.launch.py use_gz_control:=true  # pick-and-place demo (GUI)
+```
+
+Two knobs control how many objects flow through the pipeline: `--top-k K` on
+`build_eval_manifest.py` (objects per method in the manifest) and `--budget N` (candidates each
+method scores before selecting elites).
+
+**MuJoCo cross-simulator evaluation** ([`src/mujoco_eval.py`](src/mujoco_eval.py)) rebuilds
+each exported object from its SDF and runs (1) a drop test that mirrors the Gazebo one (5 cm drop,
+5° tilt, 2 s settle, tilt < 25°, drift < 5 cm), reported with per-object agreement against
+Gazebo, and (2) a physics pick-and-lift: a free-floating Panda-like parallel-jaw gripper walks
+the planner's ranked grasps, skips infeasible ones (too wide, approaching from below, hand
+already intersecting the table at the pre-grasp), executes up to three, and counts a success
+when the object rises at least 7 cm with both pads still touching it (μ = 0.5, 20 N per finger).
+`--collision sdf` uses the exported collision set (what Gazebo sees, with concave primitives
+hulled); `--collision coacd` uses a CoACD decomposition of the true mesh.
 
 ## How It Works
 
 ### 1. Parametric Object Representation
-Objects are compositions of **19 primitive types** (the 9 base shapes plus the audit/roadmap additions through v2.8 L/U/T/I extrusion) with rigid transforms. This keeps generation fast and interpretable. See the [**Shape Library & Limitations**](#shape-library--limitations) section below for the full gallery, parameters, and a fidelity audit.
+Objects are compositions of **19 primitive types** (the 9 base shapes plus the audit/roadmap
+additions through the v2.8 L/U/T/I extrusion) with rigid transforms. This keeps generation fast
+and interpretable. See [**Shape Library & Limitations**](#shape-library--limitations) below for
+the full gallery, parameters, and a fidelity audit.
 
 ### 2. Constraint-Based Scoring
 Each object is scored on manipulation-relevant criteria:
@@ -146,16 +180,17 @@ After ~30-50 iterations, the generator produces consistently high-quality object
 
 ### 4. URDF/SDF Export
 Generated objects are exported with:
-- Visual mesh (OBJ/STL)
-- Simplified collision mesh
-- Mass and inertia tensor (computed from shape + density)
-- Surface properties (friction, restitution) - Randomized friction coefficients ($0.1$ to $2.0$)
-- Ready for Gazebo simulation and MoveIt planning
+- a visual mesh (the boolean union of the primitives) and a single-mesh collision fallback
+- one collision element per primitive (native box / cylinder / sphere; a convex-hull piece for
+  the other types), so Gazebo's ODE collider never meets trimesh–trimesh pairs
+- mass, COM and inertia from the union solid (overlap-aware), falling back to per-primitive
+  analytic tensors when no CSG backend is available
+- surface properties (friction, restitution), ready for Gazebo and MoveIt
 
 ## Shape Library & Limitations
 
 The generator assembles objects from **19 primitive types**. Each row below varies
-one type to show its **degrees of freedom** (DOF) — how many independent shape
+one type to show its **degrees of freedom** (DOF), meaning how many independent shape
 parameters it has (sphere = 1, box = 3):
 
 ![Primitive gallery](docs/gallery/primitives.png)
@@ -186,7 +221,7 @@ parameters it has (sphere = 1, box = 3):
 
 Most archetypes are **faithful** (boxes/bars/plates/posts and their assemblies).
 The audit found that every **container, handle, taper, and dome was faked** with a
-solid or full-ring stand-in — a mug body was a *solid* cylinder, a cup handle a
+solid or full-ring stand-in: a mug body was a *solid* cylinder, a cup handle a
 *full* torus. **v2.2 added `hollow_shell` + `handle`** and **v2.3 added `frustum`
 + `hemisphere`**, so mug/cup/pot/teapot/jar/bowl are now real hollow vessels with
 C-handles, and plunger/trophy/ladle have proper flared cups and dome scoops (see
@@ -200,15 +235,19 @@ the archetype gallery). All five audit-proposed primitives are now built.
 | dome / scoop | solid sphere / capsule | ladle, lids, domes | **Hemisphere** | ✅ built |
 | hex fastener | round cylinder / pyramid | nut, bolt | **Hex prism** | ✅ built |
 
+Known limitation: the exported collision set convex-hulls the concave primitives (hollow shell,
+open tube, torus, handle, gear, L/U/T/I profile), so in Gazebo a cup is solid and a finger cannot
+enter it. MoveIt gets the true mesh; the MuJoCo evaluator can use a CoACD decomposition.
+
 ➡️ **Full gallery, math, per-type limitations, accepted/rejected/optimized sample
-galleries, and ready-to-implement design sketches for the proposed primitives are
-in [`docs/PRIMITIVES.md`](docs/PRIMITIVES.md).**
+galleries, and design sketches for the proposed primitives are in
+[`docs/PRIMITIVES.md`](docs/PRIMITIVES.md).**
 
 ## Project Structure
 
 ```
 3d_generator/
-├── src/                      # Core Python sources
+├── src/                      # Core Python sources (flat modules, no package install)
 │   ├── primitives.py            geometric primitives (19 types) + CompositeObject
 │   ├── archetypes.py            105 hand-written archetype factories (registry)
 │   ├── scoring.py               constraint-based scoring (+ graspability/stability gates)
@@ -220,6 +259,7 @@ in [`docs/PRIMITIVES.md`](docs/PRIMITIVES.md).**
 │   ├── generator.py             top-level generator facade
 │   ├── baselines.py             CMA-ES / GA / Random / Fixed-CAD baselines
 │   ├── grasp_planner.py         force-closure grasp synthesiser
+│   ├── mujoco_eval.py           MuJoCo drop test + physics pick-and-lift
 │   ├── diversity.py             diversity proxies
 │   ├── archetype_cem.py         per-archetype CEM track
 │   └── main.py                  CLI entry point
@@ -228,49 +268,51 @@ in [`docs/PRIMITIVES.md`](docs/PRIMITIVES.md).**
 │   ├── build_archetype_manifest.py N variants per archetype -> ROS 2 manifest
 │   ├── build_path_manifest.py      one generation path (④,⑥-⑫) -> ROS 2 manifest
 │   ├── run_unified_eval.py / run_multi_seed.sh / aggregate_seeds.py
+│   ├── run_mujoco_eval.py          MuJoCo cross-simulator eval over seed dirs
 │   ├── run_drop_test_chunked.sh    crash-resilient Gazebo drop test at scale
 │   ├── patch_sdf_collision.py      contact/friction patch for finger grasps
 │   ├── gen_strategies.py           constrained generation sweeps (galleries)
 │   ├── render_*.py                 primitive/archetype/variant galleries
+│   ├── replot_paper_figures.py     ICARM camera-ready figures at 8 pt
 │   └── archetype_tour.py / emit_latex_table.py / make_clean_diff.py
-├── ros2_ws/src/generated_objects_eval/   # ROS 2 evaluation package
-├── docs/                                 # Project page + PRIMITIVES/ROADMAP/GENERATION_PATHS
+├── tests/                    # pytest suite (v2 invariants + MuJoCo evaluator)
+├── ros2_ws/src/generated_objects_eval/   # ROS 2 evaluation package (MoveIt 2 + Gazebo)
+├── docs/                                 # Project page + PRIMITIVES/ROADMAP/GENERATION_PATHS/SIM_NOTES
 ├── GUIDE.md                              # generate -> visualize -> drop/pick walkthrough
-├── README.md / REPRODUCE.md / DEMO.md
+├── README.md / REPRODUCE.md / DEMO.md / DISCREPANCIES.md
 ├── requirements.txt
 └── reproduce_paper.sh
 ```
 
-All Python scripts add `src/` to `sys.path` automatically; you can also
-`pip install -e .` once a `pyproject.toml` is added.
-
 ## Output Format
 
-Each generated object produces:
+Each exported object:
 ```
 object_0000/
-├── object_0000.urdf           # Robot description format
-├── object_0000.sdf            # Gazebo model format
-├── object_0000_metadata.yaml  # Properties and scores
+├── object_0000.urdf           # robot description (MoveIt)
+├── object_0000.sdf            # Gazebo model (per-primitive collisions)
+├── object_0000_metadata.yaml  # primitives, mass properties, scores
 └── meshes/
-    ├── object_0000_visual.obj
-    └── object_0000_collision.obj
+    ├── object_0000_visual.obj     # union mesh
+    ├── object_0000_collision.obj  # single-mesh collision (fallback)
+    └── object_0000_col<i>.obj     # convex-hull collision piece for primitive i (non-native types)
 ```
 
 ## Integration with ROS 2
 
-### Loading in Gazebo
+### Loading in Gazebo (Harmonic)
 
-```xml
-<!-- In your launch file -->
-<include file="$(find gazebo_ros)/launch/gazebo.launch.py">
-  <arg name="world" value="empty.world"/>
-</include>
+Start a world and spawn an exported SDF with `ros_gz_sim`:
 
-<node pkg="gazebo_ros" type="spawn_entity.py" name="spawn_object"
-      args="-file $(find your_pkg)/objects/object_0000/object_0000.sdf 
-            -entity object_0000 -x 0.5 -y 0 -z 0.8"/>
+```bash
+gz sim -r empty.sdf &
+ros2 run ros_gz_sim create -file "$PWD/output/objects/object_0000/object_0000.sdf" \
+    -name object_0000 -x 0.5 -y 0 -z 0.1
 ```
+
+The evaluation package ships its own world (`ros2 launch generated_objects_eval
+stability_world.launch.py`, a Panda table at 0.4 m) and the drop-test node
+`gazebo_stability_eval --manifest <manifest.json> --out <result.json>`.
 
 ### Using with MoveIt 2
 
@@ -278,8 +320,8 @@ The demo driver (`ros2_ws/src/generated_objects_eval/generated_objects_eval/demo
 shows the recommended pattern under `moveit_py` 2.12.x: publish a
 `moveit_msgs/PlanningScene` *diff* on the `/planning_scene` topic instead of
 calling `moveit_py.PlanningSceneInterface.apply_collision_object` (which
-segfaults in 2.12.x on Jazzy). The driver uses this to add the table as a
-CollisionObject so RRTConnect plans around it.
+segfaults in 2.12.x on Jazzy). The driver uses this to add the table and the object's true
+mesh as CollisionObjects so RRTConnect plans around them.
 
 ```python
 from moveit_msgs.msg import CollisionObject, PlanningScene, PlanningSceneWorld
@@ -306,19 +348,24 @@ We estimate parallel-jaw graspability without a grasp database by counting antip
 - Find pairs where: normals nearly opposite (n₁·n₂ < -0.9) AND distance within gripper range
 - More valid pairs → higher graspability score
 
-### Stability Proxy  
+### Stability Proxy
 - Compute support polygon (convex hull of ground-contact vertices)
 - Project center of mass onto ground plane
 - Score = distance from COM to polygon boundary (larger = more stable)
 
 ## Citation
 
-If you use this in research, please cite:
+If you use this in research, please cite (proceedings forthcoming):
 ```bibtex
-@inproceedings{generative3d2025,
-  title={Generative 3D Object Modeling for Robust Robot Manipulation in ROS 2},
-  author={...},
-  year={2025}
+@inproceedings{albatati2026generative3d,
+  title     = {Generative 3D Object Modeling for Robust Robot Manipulation in ROS 2},
+  author    = {Al-Batati, Abdulrahman S. and Alhabashi, Yasser and Gabr, Khaled
+               and Sibaee, Serry and Abdelkader, Mohamed and Boulila, Wadii},
+  booktitle = {Proceedings of the 2026 International Conference on Advanced
+               Robotics and Mechatronics (ICARM)},
+  address   = {Paris, France},
+  year      = {2026},
+  note      = {Accepted and presented; proceedings forthcoming},
 }
 ```
 
