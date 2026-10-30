@@ -89,16 +89,22 @@ def decode(x: np.ndarray, name: str = "candidate") -> CompositeObject:
 # Optional "multitype" encoding (opt-in, for representation-parity studies).
 #
 # Fixed-dim vector with K primitive slots. Each slot carries a T-way type
-# selector (argmax over ALL registered primitive types), three log-size params
-# (the first len(spec.param_names) are used), and — for non-base slots — a
-# presence gate plus an offset and rotation. So the gradient-free baselines can
-# search the same type palette as Ours, with counts in {1..K}. The residual gap
-# to Ours (unbounded count) is documented in DISCREPANCIES.md item 4.
+# selector (argmax over ALL registered primitive types), _MAX_PARAMS shape
+# params in [0, 1] (the first len(spec.param_names) are used, each mapped
+# log-uniformly into that type's own clamp range, so discrete params such as
+# n_sides and wide ones such as a handle's arc are reachable), and — for
+# non-base slots — a presence gate plus an offset and rotation. So the
+# gradient-free baselines can search the same type palette as Ours, with counts
+# in {1..K}. The residual gap to Ours (unbounded count) is documented in
+# DISCREPANCIES.md item 4.
 # ---------------------------------------------------------------------------
 
 _T_TYPES = len(PRIMITIVE_SPECS)
-_MAX_PARAMS = 3
-_LOG_S_LO, _LOG_S_HI = np.log(0.005), np.log(0.14)
+# Sized for the largest spec (5 for extruded_profile). Was a fixed 3, which
+# crashed as soon as a 4/5-param type (hollow shell, handle, gear, ...) won the
+# type argmax.
+_MAX_PARAMS = max(len(s.param_names) for s in PRIMITIVE_SPECS)
+_LOG_S_LO, _LOG_S_HI = 0.0, 1.0                  # normalized shape params
 _BASE_BLK = _T_TYPES + _MAX_PARAMS
 _SEC_BLK = _T_TYPES + _MAX_PARAMS + 1 + 3 + 3   # +presence +offset +rotation
 _MT_SLOTS = 4                                    # counts in {1..4}
@@ -123,10 +129,11 @@ ENC_MT_RANGE = ENC_MT_HI - ENC_MT_LO
 ENC_MT_DIM = len(ENC_MT_LO)
 
 
-def _build_typed(type_logits, size_logs, transform):
+def _build_typed(type_logits, size_u, transform):
     spec = PRIMITIVE_SPECS[int(np.argmax(type_logits))]
     k = len(spec.param_names)
-    params = np.clip(np.exp(size_logs[:k]), spec.clamp_lo, spec.clamp_hi)
+    lo, hi = np.log(np.asarray(spec.clamp_lo, float)), np.log(np.asarray(spec.clamp_hi, float))
+    params = np.exp(lo + np.clip(size_u[:k], 0.0, 1.0) * (hi - lo))
     return spec.build(params, transform)
 
 

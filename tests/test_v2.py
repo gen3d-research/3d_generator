@@ -371,3 +371,16 @@ def test_plan_grasps_is_reproducible_for_a_seed():
     a = plan_grasps(obj, n_surface=128, max_pairs=600, seed=3)
     b = plan_grasps(obj, n_surface=128, max_pairs=600, seed=3)
     assert [tuple(g.center) for g in a.grasps] == [tuple(g.center) for g in b.grasps]
+
+
+def test_multitype_encoding_decodes_every_type():
+    import numpy as np
+    from baselines import ENC_MT_HI, ENC_MT_LO, decode_multitype
+    from cem import PRIMITIVE_SPECS
+    rng = np.random.default_rng(0)
+    seen = set()
+    for _ in range(300):
+        obj = decode_multitype(rng.uniform(ENC_MT_LO, ENC_MT_HI))
+        assert 1 <= len(obj.primitives) <= 4
+        seen.update(p.ptype for p in obj.primitives)
+    assert seen == {s.ptype for s in PRIMITIVE_SPECS}

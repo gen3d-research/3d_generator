@@ -40,8 +40,10 @@ def _cem_objects(top_k: int, budget: int, seed: int):
     return gen.generate(top_k, ensure_quality=False)
 
 
-def _baseline_objects(name: str, top_k: int, budget: int, seed: int):
-    r = run_baseline(name, budget=budget, seed=seed, top_k=top_k)
+def _baseline_objects(name: str, top_k: int, budget: int, seed: int,
+                      encoding: str = "twobox"):
+    kw = {} if name == "fixed_cad" or encoding == "twobox" else {"encoding": encoding}
+    r = run_baseline(name, budget=budget, seed=seed, top_k=top_k, **kw)
     return r.objects
 
 
@@ -110,6 +112,10 @@ def main():
                    help="CEM generates POOL x top-k objects; with --grasp-model the "
                         "top-k whose best grasp has the highest predicted success "
                         "are kept (physics-aware selection), else the first top-k")
+    p.add_argument("--baseline-encoding", default="twobox", choices=["twobox", "multitype"],
+                   help="search space of CMA-ES / GA / random search: the published "
+                        "two-box 13-D encoding, or the 22-D multi-type parity encoding "
+                        "(DISCREPANCIES.md #4)")
     args = p.parse_args()
     model = None
     if args.grasp_model:
@@ -125,7 +131,8 @@ def main():
         if method == "cem":
             objs = _cem_objects(args.top_k * max(1, args.cem_pool), args.budget, args.seed)
         else:
-            objs = _baseline_objects(method, args.top_k, args.budget, args.seed)
+            objs = _baseline_objects(method, args.top_k, args.budget, args.seed,
+                                     args.baseline_encoding)
         # Plan (and optionally score) grasps for every candidate, then select.
         cands = []
         for k, obj in enumerate(objs):

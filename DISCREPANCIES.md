@@ -76,10 +76,16 @@ quality**. Grasp-success-rate is the cleanest independent comparison.
 - **Locked behavior:** baselines use `encoding="twobox"` (the published config;
   bit-for-bit unchanged).
 - **Opt-in parity:** pass `encoding="multitype"` to the gradient-free baselines
-  for a fixed-dim 22-D space with 1–2 primitives across 4 types. This narrows
-  the gap; the residual (counts 3–4) cannot be expressed in a fixed-dim
-  continuous vector for CMA-ES/GA. For a fully controlled study, instead
-  restrict Ours to the two-box encoding.
+  (or `build_eval_manifest.py --baseline-encoding multitype`) for a fixed-dim
+  space with 1–4 primitives across all 19 types (118-D: per slot a type
+  selector, 5 shape params in [0, 1] mapped log-uniformly into the chosen
+  type's clamp range, and for secondary slots a presence gate, offset and
+  rotation). This narrows the gap; Ours can still use more parts (up to
+  `max_primitives`), which a fixed-dim continuous vector cannot express. For a
+  fully controlled study, instead restrict Ours to the two-box encoding.
+  (Oct 2026: the encoding had a fixed 3 shape params per slot and crashed
+  whenever a 4/5-param type was selected; fixed, so no earlier multitype run
+  exists to compare against.)
 
 ## 5. Statistics: population std, no CIs, no significance test *(additive, point estimates unchanged)*
 
