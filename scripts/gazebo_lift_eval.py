@@ -75,10 +75,11 @@ def rot_from_quat(q):
 
 
 def rpy_from_rot(R):
-    p = np.arcsin(np.clip(-R[2, 0], -1, 1))
-    if abs(np.cos(p)) > 1e-6:
+    s = np.hypot(R[0, 0], R[1, 0])
+    p = np.arctan2(-R[2, 0], s)
+    if s > 1e-4:
         return np.arctan2(R[2, 1], R[2, 2]), p, np.arctan2(R[1, 0], R[0, 0])
-    return np.arctan2(-R[1, 2], R[1, 1]), p, 0.0
+    return np.arctan2(-R[1, 2], R[1, 1]), p, 0.0      # gimbal lock: all yaw goes into roll
 
 
 def hand_frame(approach, axis):
