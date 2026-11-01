@@ -27,14 +27,17 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from generator import RoboticObjectGenerator, GeneratorConfig
 from baselines import run_baseline
-from grasp_planner import plan_grasps, GripperSpec
+from grasp_planner import plan_grasps, GripperSpec, grasps_as_dicts
+
+_serialise_grasps = grasps_as_dicts   # name the other manifest builders import
 from export import URDFExporter, ExportConfig
 
 
-def _cem_objects(top_k: int, budget: int, seed: int):
+def _cem_objects(top_k: int, budget: int, seed: int, grasp_model=None):
     iters = 30
     n_samples = max(20, budget // iters)
-    cfg = GeneratorConfig(cem_iterations=iters, cem_samples=n_samples, seed=seed)
+    cfg = GeneratorConfig(cem_iterations=iters, cem_samples=n_samples, seed=seed,
+                          grasp_model=grasp_model)
     gen = RoboticObjectGenerator(cfg)
     gen.train(verbose=False)
     return gen.generate(top_k, ensure_quality=False)
@@ -50,37 +53,12 @@ def _baseline_objects(name: str, top_k: int, budget: int, seed: int,
 def _rank_by_model(model, obj, grasps, seed):
     """Order grasps by the learned predictor's lift probability (stored as
     p_success); returns (grasps, best probability)."""
-    import trimesh
-    mesh = obj.to_mesh()
-    pts, _ = trimesh.sample.sample_surface(mesh, 512, seed=seed)
-    try:
-        mass, _, com = obj.mesh_mass_properties(1000.0)
-    except Exception:
-        mass, com = obj.total_volume() * 1000.0, obj.center_of_mass(1000.0)
-    p = model.predict(pts, float(mass), com, np.ptp(mesh.vertices, axis=0), grasps)
+    from grasp_predictor import predict_object
+    p = predict_object(model, obj, grasps, seed)
     for g, pi in zip(grasps, p):
         g["p_success"] = float(pi)
     order = np.argsort(-p, kind="stable")
     return [grasps[i] for i in order], float(p.max())
-
-
-def _serialise_grasps(grasps, max_keep=5):
-    out = []
-    for g in grasps[:max_keep]:
-        # axis = the antipodal contact line (contact1 -> contact2). The gripper
-        # must open its fingers along this so they actually straddle the object.
-        axis = np.asarray(g.contact2) - np.asarray(g.contact1)
-        n = float(np.linalg.norm(axis))
-        axis = (axis / n).tolist() if n > 1e-9 else [0.0, 1.0, 0.0]
-        out.append({
-            "center": g.center.tolist(),
-            "approach": g.approach.tolist(),
-            "axis": axis,
-            "width": float(g.width),
-            "margin": float(g.margin),
-            "score": float(getattr(g, "score", 0.0)),
-        })
-    return out
 
 
 def main():
@@ -108,6 +86,9 @@ def main():
     p.add_argument("--grasp-model", type=Path, default=None,
                    help="model.npz from train_grasp_predictor.py: order each object's "
                         "grasps by predicted physical lift success (stored as p_success)")
+    p.add_argument("--train-with-model", action="store_true",
+                   help="Also use --grasp-model inside CEM training: each sample's score "
+                        "is multiplied by its best grasp's predicted lift success")
     p.add_argument("--cem-pool", type=int, default=1,
                    help="CEM generates POOL x top-k objects; with --grasp-model the "
                         "top-k whose best grasp has the highest predicted success "
@@ -129,7 +110,8 @@ def main():
     for method in args.methods:
         print(f"[{method}] generating top-{args.top_k} objects ...")
         if method == "cem":
-            objs = _cem_objects(args.top_k * max(1, args.cem_pool), args.budget, args.seed)
+            objs = _cem_objects(args.top_k * max(1, args.cem_pool), args.budget, args.seed,
+                                str(args.grasp_model) if args.train_with_model else None)
         else:
             objs = _baseline_objects(method, args.top_k, args.budget, args.seed,
                                      args.baseline_encoding)
@@ -139,7 +121,7 @@ def main():
             report = plan_grasps(obj, GripperSpec(), n_surface=256,
                                  max_pairs=1500, max_returned=args.n_grasps,
                                  seed=args.seed + k, table_check=args.table_check)
-            grasps = _serialise_grasps(report.grasps, args.n_grasps)
+            grasps = grasps_as_dicts(report.grasps, args.n_grasps)
             best = -1.0
             if model is not None and grasps:
                 grasps, best = _rank_by_model(model, obj, grasps, args.seed + k)

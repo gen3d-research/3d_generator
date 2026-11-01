@@ -92,3 +92,29 @@ class GraspPredictor:
                             np.tile(np.asarray(extents, float), (n, 1)))
         P = np.broadcast_to(even_subsample(np.asarray(points, float)), (n, N_POINTS, 3))
         return 1.0 / (1.0 + np.exp(-self.logits(local_points(P, R, c), S)))
+
+
+def predict_object(model: GraspPredictor, obj, grasps: list[dict], seed: int = 0) -> np.ndarray:
+    """Success probability of each grasp (dicts as above) of a CompositeObject."""
+    import trimesh
+    mesh = obj.to_mesh()
+    pts, _ = trimesh.sample.sample_surface(mesh, 512, seed=seed)
+    try:
+        mass, _, com = obj.mesh_mass_properties(1000.0)
+    except Exception:
+        mass, com = obj.total_volume() * 1000.0, obj.center_of_mass(1000.0)
+    return model.predict(pts, float(mass), com, np.ptp(mesh.vertices, axis=0), grasps)
+
+
+def object_lift_probability(model: GraspPredictor, obj, seed: int = 0, n_surface: int = 128,
+                            max_pairs: int = 600, max_grasps: int = 12) -> float:
+    """Predicted lift success of the object's best table-clearing grasp; 0 if it
+    has none or planning fails. This is the CEM's physics-aware signal."""
+    from grasp_planner import GripperSpec, grasps_as_dicts, plan_grasps
+    try:
+        report = plan_grasps(obj, GripperSpec(), n_surface=n_surface, max_pairs=max_pairs,
+                             max_returned=max_grasps, seed=seed, table_check=True)
+        grasps = grasps_as_dicts(report.grasps, max_grasps)
+        return float(predict_object(model, obj, grasps, seed).max()) if grasps else 0.0
+    except Exception:
+        return 0.0

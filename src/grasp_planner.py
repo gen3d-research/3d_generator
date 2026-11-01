@@ -646,6 +646,26 @@ def plan_grasps(obj: CompositeObject, gripper: Optional[GripperSpec] = None,
                        grasps=candidates[:max_returned])
 
 
+def grasps_as_dicts(grasps, max_keep: int = 5) -> list:
+    """The eval manifest's form of a grasp list."""
+    out = []
+    for g in grasps[:max_keep]:
+        # axis = the antipodal contact line (contact1 -> contact2). The gripper
+        # must open its fingers along this so they actually straddle the object.
+        axis = np.asarray(g.contact2) - np.asarray(g.contact1)
+        n = float(np.linalg.norm(axis))
+        axis = (axis / n).tolist() if n > 1e-9 else [0.0, 1.0, 0.0]
+        out.append({
+            "center": g.center.tolist(),
+            "approach": g.approach.tolist(),
+            "axis": axis,
+            "width": float(g.width),
+            "margin": float(g.margin),
+            "score": float(getattr(g, "score", 0.0)),
+        })
+    return out
+
+
 def grasp_success_rate(objects, gripper: Optional[GripperSpec] = None,
                        n_surface: int = 256, max_pairs: int = 1500,
                        seed: int = 0) -> dict:

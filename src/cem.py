@@ -15,6 +15,7 @@ the set of primitive types and the maximum primitive count are configurable
 rather than hardcoded. See plan-to-make-all-* / DISCREPANCIES.md.
 """
 
+import multiprocessing as mp
 import numpy as np
 from typing import List, Dict, Tuple, Optional, Callable
 from dataclasses import dataclass, field
@@ -465,6 +466,19 @@ class CEMConfig:
     learning_rate: float = 0.7    # Interpolation with old distribution
     min_std: float = 0.1          # Minimum standard deviation
     seed: int = 42
+    # Worker processes for scoring. 1 keeps the published serial path. Above 1,
+    # each sample's scoring gets its own seed for the sampling inside the scorer,
+    # so results depend on the seed and not on the number of workers (2, 4, ...).
+    n_workers: int = 1
+
+
+_worker_evaluate = None       # inherited by forked scoring workers
+
+
+def _evaluate_seeded(job):
+    seed, obj = job
+    np.random.seed(seed)
+    return _worker_evaluate(obj)
 
 
 class CEMOptimizer:
@@ -476,8 +490,11 @@ class CEMOptimizer:
     """
 
     def __init__(self, config: CEMConfig = None, scoring_config: ScoringConfig = None,
-                 initial_distribution: ParameterDistribution = None):
+                 initial_distribution: ParameterDistribution = None,
+                 objective: Optional[Callable[[CompositeObject, ScoreBreakdown], float]] = None):
         self.config = config or CEMConfig()
+        # What elites are selected on; default: the scorer's total.
+        self.objective = objective
         self.scorer = ObjectScorer(scoring_config)
         self.rng = np.random.default_rng(self.config.seed)
 
@@ -486,6 +503,21 @@ class CEMOptimizer:
 
         # History for analysis
         self.history: List[Dict] = []
+
+    def _evaluate(self, objects: List[CompositeObject], iteration: int) -> List[tuple]:
+        """(breakdown, selection score) for each object, serially or in forked workers."""
+        def evaluate(obj):
+            breakdown = self.scorer.score(obj)
+            return breakdown, (breakdown.total_score if self.objective is None
+                               else self.objective(obj, breakdown))
+
+        if self.config.n_workers <= 1:
+            return [evaluate(o) for o in objects]
+        global _worker_evaluate
+        _worker_evaluate = evaluate
+        jobs = [([self.config.seed, iteration, i], o) for i, o in enumerate(objects)]
+        with mp.get_context("fork").Pool(self.config.n_workers) as pool:
+            return pool.map(_evaluate_seeded, jobs, chunksize=1)
 
     def optimize(self,
                  callback: Optional[Callable[[int, float, ParameterDistribution], None]] = None
@@ -504,22 +536,12 @@ class CEMOptimizer:
 
         for iteration in range(self.config.n_iterations):
             # Sample candidates
-            candidates = []
-            scores = []
-            score_breakdowns = []
-
-            for i in range(self.config.n_samples):
-                obj = self.distribution.sample_object(
-                    self.rng,
-                    name=f"iter{iteration}_sample{i}"
-                )
-                breakdown = self.scorer.score(obj)
-
-                candidates.append(obj)
-                scores.append(breakdown.total_score)
-                score_breakdowns.append(breakdown)
-
-            scores = np.array(scores)
+            candidates = [self.distribution.sample_object(
+                              self.rng, name=f"iter{iteration}_sample{i}")
+                          for i in range(self.config.n_samples)]
+            evaluated = self._evaluate(candidates, iteration)
+            score_breakdowns = [b for b, _ in evaluated]
+            scores = np.array([s for _, s in evaluated])
 
             # Select elite samples
             elite_indices = np.argsort(scores)[-n_elite:]

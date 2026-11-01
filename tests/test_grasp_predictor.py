@@ -37,3 +37,27 @@ def test_pointnet_is_order_invariant(tmp_path):
     S = rng.normal(size=(3, 13)).astype(np.float32)
     perm = rng.permutation(N_POINTS)
     assert np.allclose(gp.logits(local, S), gp.logits(local[:, perm], S), atol=1e-5)
+
+
+def test_object_lift_probability_is_a_probability(tmp_path):
+    from archetypes import ARCHETYPE_REGISTRY
+    from grasp_predictor import object_lift_probability
+    gp = GraspPredictor(_random_model(tmp_path / "m.npz"))
+    p = object_lift_probability(gp, ARCHETYPE_REGISTRY["mug_like"](), seed=0)
+    assert 0.0 < p < 1.0
+
+
+def test_cem_selects_elites_on_the_objective():
+    from cem import CEMConfig, CEMOptimizer
+    seen = []
+
+    def objective(obj, breakdown):
+        seen.append(obj)
+        return -breakdown.total_score       # selects the worst samples
+
+    plain = CEMOptimizer(CEMConfig(n_samples=20, n_iterations=2, seed=3))
+    plain.optimize()
+    inverted = CEMOptimizer(CEMConfig(n_samples=20, n_iterations=2, seed=3), objective=objective)
+    inverted.optimize()
+    assert len(seen) == 40
+    assert inverted.history[0]["mean_elite_score"] < 0 < plain.history[0]["mean_elite_score"]

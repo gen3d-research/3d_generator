@@ -399,3 +399,25 @@ def test_concave_decomposition_splits_hollow_primitives(tmp_path):
                                          tmp_path / mode, "pc")
         counts[mode] = open(paths["sdf"]).read().count("<collision")
     assert counts["coacd"] > counts["hull"]
+
+
+def test_parallel_cem_does_not_depend_on_worker_count():
+    from cem import CEMConfig, CEMOptimizer
+    runs = []
+    for workers in (2, 3):
+        opt = CEMOptimizer(CEMConfig(n_samples=16, n_iterations=2, seed=5, n_workers=workers))
+        opt.optimize()
+        runs.append(opt.history)
+    assert runs[0] == runs[1]
+    assert runs[0][-1]["mean_elite_score"] > 0
+
+
+def test_serial_cem_matches_published_path_given_global_seed():
+    from cem import CEMConfig, CEMOptimizer
+    runs = []
+    for _ in range(2):
+        np.random.seed(11)
+        opt = CEMOptimizer(CEMConfig(n_samples=10, n_iterations=2, seed=5))
+        opt.optimize()
+        runs.append(opt.history)
+    assert runs[0] == runs[1]

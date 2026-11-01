@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from scipy import stats
 
-CONFIGS = ["plain", "grasps", "select"]
+CONFIGS = ["plain", "grasps", "select", "train", "train_select"]
 TAGS = [("coacd", "nominal"), ("coacd_mu0.3", "mu 0.3"), ("coacd_mu1.0", "mu 1.0"),
         ("coacd_grip10.0", "10 N"), ("coacd_grip40.0", "40 N")]
 
@@ -58,7 +58,10 @@ def main() -> None:
     comps = [("CEM select vs CEM plain", ("select", "cem"), ("plain", "cem")),
              ("CEM grasps vs CEM plain", ("grasps", "cem"), ("plain", "cem")),
              ("CEM select vs Fixed CAD plain", ("select", "cem"), ("plain", "fixed_cad")),
-             ("CEM select vs Fixed CAD grasps", ("select", "cem"), ("grasps", "fixed_cad"))]
+             ("CEM select vs Fixed CAD grasps", ("select", "cem"), ("grasps", "fixed_cad")),
+             ("CEM train vs CEM grasps", ("train", "cem"), ("grasps", "cem")),
+             ("CEM train+select vs CEM select", ("train_select", "cem"), ("select", "cem")),
+             ("CEM train+select vs Fixed CAD grasps", ("train_select", "cem"), ("grasps", "fixed_cad"))]
     summary = []
     for name, a, b in comps:
         for tag, label in TAGS:

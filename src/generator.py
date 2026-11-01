@@ -31,6 +31,7 @@ class GeneratorConfig:
     cem_samples: int = 100
     elite_fraction: float = 0.2
     learning_rate: float = 0.7
+    cem_workers: int = 1          # scoring processes during training (CEMConfig.n_workers)
 
     # Maximum primitives per object (configurable; no hard cap). The CEM learns
     # a distribution over counts 1..max_primitives.
@@ -62,6 +63,10 @@ class GeneratorConfig:
     repair_min_tip_deg: float = 20.0
     # Point ⑪: bias generation toward a target overall size (longest extent, m).
     target_extent: Optional[float] = None
+    # Physics-aware training: model.npz from train_grasp_predictor.py. The CEM then
+    # selects elites on score x predicted lift success of the best grasp. Costs one
+    # grasp plan per sample; None reproduces the proxy-only objective.
+    grasp_model: Optional[str] = None
 
     # Export settings
     density: float = 1000.0
@@ -182,11 +187,24 @@ class RoboticObjectGenerator:
             n_samples=n_samples or self.config.cem_samples,
             elite_fraction=self.config.elite_fraction,
             learning_rate=self.config.learning_rate,
-            seed=self.config.seed
+            seed=self.config.seed,
+            n_workers=self.config.cem_workers,
         )
         
+        objective = None
+        if self.config.grasp_model:
+            from grasp_predictor import GraspPredictor, object_lift_probability
+            model = GraspPredictor(self.config.grasp_model)
+            seed = self.config.seed
+
+            def objective(obj, breakdown):
+                if breakdown.total_score <= 0.0:
+                    return 0.0
+                return breakdown.total_score * object_lift_probability(model, obj, seed)
+
         optimizer = CEMOptimizer(cem_config, self.scoring_config, 
-                               initial_distribution=self.distribution)
+                               initial_distribution=self.distribution,
+                               objective=objective)
         
         def callback(iteration, mean_score, dist):
             if verbose:

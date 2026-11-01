@@ -7,6 +7,10 @@
 #   grasps  --table-check + --grasp-model     (re-rank each object's grasps)
 #   select  grasps + --cem-pool POOL          (CEM keeps the top-k of POOL x k
 #                                              objects by best predicted grasp)
+#   train   grasps + --train-with-model       (the CEM selects elites on score x
+#                                              predicted lift during training)
+#   train_select  train + --cem-pool POOL
+# (CONFIGS and METHODS pick a subset, e.g. CONFIGS="train train_select" METHODS=cem.)
 # then MuJoCo pick-and-lift on the true geometry (CoACD) under nominal physics
 # and four perturbations (mu 0.3 / 1.0, grip 10 / 40 N), so the selection is
 # not graded only under the physics its predictor was trained on. Train the
@@ -20,28 +24,32 @@ cd "$(dirname "$0")/.."
 MODEL="${MODEL:?set MODEL=path/to/model.npz}"
 OUT="${OUT:-output/physics_aware}"
 POOL="${POOL:-4}"
+CONFIGS="${CONFIGS:-plain grasps select}"
+read -r -a METHODS <<< "${METHODS:-cem fixed_cad}"
 PY="${PYTHON:-$HOME/venv/3d_cem/bin/python}"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 run() { nice -n "${NICE:-19}" env -u PYTHONPATH "$PY" "$@"; }
 
 for S in "$@"; do
-  for CFG in plain grasps select; do
+  for CFG in $CONFIGS; do
     D="$OUT/$CFG/seed_$S"; mkdir -p "$D"
     [ -s "$D/eval_manifest.json" ] && continue
     case $CFG in
       plain)  EXTRA=() ;;
       grasps) EXTRA=(--table-check --grasp-model "$MODEL") ;;
       select) EXTRA=(--table-check --grasp-model "$MODEL" --cem-pool "$POOL") ;;
+      train)  EXTRA=(--table-check --grasp-model "$MODEL" --train-with-model) ;;
+      train_select) EXTRA=(--table-check --grasp-model "$MODEL" --train-with-model --cem-pool "$POOL") ;;
     esac
     ( run scripts/build_eval_manifest.py --budget 1500 --top-k 25 --seed "$S" \
-          --methods cem fixed_cad --out "$D/eval_manifest.json" \
+          --methods "${METHODS[@]}" --out "$D/eval_manifest.json" \
           --export-root "$D/manifest_objects" "${EXTRA[@]}" > "$D/build.log" 2>&1
       echo "[$CFG seed $S] manifest exit=$?" ) &
   done
 done
 wait
 
-for CFG in plain grasps select; do
+for CFG in $CONFIGS; do
   run scripts/run_mujoco_eval.py --root "$OUT/$CFG" --seeds "$@" --collision coacd \
       --workers "${WORKERS:-12}" > "$OUT/$CFG/mujoco_nominal.log" 2>&1
   for P in "mu 0.3" "mu 1.0" "grip-force-n 10.0" "grip-force-n 40.0"; do
