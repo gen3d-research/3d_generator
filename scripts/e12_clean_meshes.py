@@ -18,7 +18,7 @@ import trimesh
 
 # Native up axis of each model's output. Hunyuan3D-2 is y-up, the others z-up.
 UP_TO_Z = {"shap_e": np.eye(3), "trellis": np.eye(3),
-           "hunyuan3d": np.array([[1.0, 0, 0], [0, 0, -1.0], [0, 1.0, 0]])}
+           "hunyuan3d": np.array([[1.0, 0, 0], [0, 0, -1.0], [0, 1.0, 0]]), "gso": np.eye(3)}
 MAX_FACES = 60000
 
 
@@ -41,8 +41,11 @@ def _largest(m, info):
 
 
 def clean(path, model, extent):
+    return clean_mesh(trimesh.load(path, force="mesh", process=True), model, extent)
+
+
+def clean_mesh(m, model, extent):
     info = {}
-    m = trimesh.load(path, force="mesh", process=True)
     if len(m.faces) == 0:
         raise ValueError("empty mesh")
     m.apply_transform(np.vstack([np.column_stack([UP_TO_Z[model], np.zeros(3)]), [0, 0, 0, 1]]))

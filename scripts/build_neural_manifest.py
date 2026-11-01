@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 from concurrent.futures import ProcessPoolExecutor
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -56,12 +57,12 @@ COL = """<collision name="{name}_collision_{i}"><geometry><mesh><uri>meshes/{fil
     <surface><friction><ode><mu>{mu}</mu><mu2>{mu}</mu2></ode></friction><bounce><restitution_coefficient>0.1</restitution_coefficient></bounce></surface></collision>"""
 
 
-def export(m, d, name):
+def export(m, d, name, coacd_dir=None):
     meshes = d / "meshes"
     meshes.mkdir(parents=True, exist_ok=True)
     visual = meshes / f"{name}_visual.obj"
     m.export(visual, include_normals=True)     # Gazebo's mesh loader needs normals
-    parts = decompose_file(visual, d / "coacd")
+    parts = decompose_file(visual, coacd_dir or d / "coacd")
     cols = []
     for i, p in enumerate(parts):
         rel = f"{name}_col{i}.obj"
@@ -73,8 +74,24 @@ def export(m, d, name):
     return str((d / f"{name}.sdf").resolve()), str(visual.resolve()), float(m.volume * DENSITY), [float(x) for x in m.center_mass]
 
 
+@lru_cache(maxsize=1)
+def _predictor(path):
+    from grasp_predictor import GraspPredictor
+    return GraspPredictor(path)
+
+
+def _rank_by_model(model, obj, grasps, seed):
+    """Same ordering as build_eval_manifest: by predicted lift probability, stored as p_success."""
+    from grasp_predictor import predict_object
+    p = predict_object(model, obj, grasps, seed)
+    for g, pi in zip(grasps, p):
+        g["p_success"] = float(pi)
+    order = np.argsort(-p, kind="stable")
+    return [grasps[i] for i in order], float(p.max())
+
+
 def one(job):
-    k, prompt, rec, model, d, seed = job
+    k, prompt, rec, model, d, seed, rank = job
     name = f"{model}_{k:04d}"
     row = {"name": name, "method": model, "prompt": prompt["prompt"], "archetype": prompt["name"]}
     row.update({a: b for a, b in rec.items() if a not in ("key", "path")})
@@ -84,10 +101,15 @@ def one(job):
         m = trimesh.load(rec["path"], force="mesh", process=True)
         if not m.is_watertight:
             raise ValueError("cleaned mesh not watertight here")
-        report = plan_grasps(MeshObject(m, name), GripperSpec(), n_surface=256, max_pairs=1500,
-                             max_returned=12, seed=seed + k)
-        sdf, visual, mass, com = export(m, d / "manifest_objects" / model / name, name)
-        row.update(sdf=sdf, visual_mesh=visual, mass=mass, com=com, grasps=grasps_as_dicts(report.grasps, 12),
+        obj = MeshObject(m, name)
+        report = plan_grasps(obj, GripperSpec(), n_surface=256, max_pairs=1500, max_returned=12, seed=seed + k,
+                             table_check=rank["table_check"])
+        grasps = grasps_as_dicts(report.grasps, 12)
+        if rank["model"] and grasps:
+            grasps, _ = _rank_by_model(_predictor(rank["model"]), obj, grasps, seed + k)
+        coacd_dir = rank["coacd_root"] / f"{k:04d}" if rank["coacd_root"] else None
+        sdf, visual, mass, com = export(m, d / "manifest_objects" / model / name, name, coacd_dir)
+        row.update(sdf=sdf, visual_mesh=visual, mass=mass, com=com, grasps=grasps,
                    n_grasps_synth=len(report.grasps))
     except Exception as e:     # noqa: BLE001
         row["failed"] = f"{type(e).__name__}: {e}"
@@ -100,7 +122,12 @@ def main():
     ap.add_argument("--seed", type=int, required=True)
     ap.add_argument("--root", type=Path, default=ROOT / "output/e12")
     ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--table-check", action="store_true", help="hand-body-vs-table check in the planner")
+    ap.add_argument("--grasp-model", type=Path, help="order grasps by this predictor")
+    ap.add_argument("--coacd-root", type=Path, help="share CoACD parts between arms that use the same meshes")
     args = ap.parse_args()
+    rank = {"table_check": args.table_check, "model": str(args.grasp_model) if args.grasp_model else None,
+            "coacd_root": args.coacd_root}
     d = args.root / args.model / f"seed_{args.seed}"
     cleaned = json.load(open(d / "clean.json"))
     prompts = json.load(open(args.root / "prompts" / f"seed_{args.seed}.json"))
@@ -108,7 +135,7 @@ def main():
     for k, p in enumerate(prompts):
         key = f"{k:03d}_{p['name']}"
         if key in cleaned:
-            jobs.append((k, p, cleaned[key], args.model, d, args.seed))
+            jobs.append((k, p, cleaned[key], args.model, d, args.seed, rank))
     with ProcessPoolExecutor(args.workers) as ex:
         rows = list(ex.map(one, jobs))
     (d / "objects.json").write_text(json.dumps(rows, indent=1))

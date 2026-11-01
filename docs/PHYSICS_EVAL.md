@@ -138,3 +138,34 @@ pose and returns its lowest point in the object frame (the table is z = 0 for ba
 below −2 mm. It is off by default so published manifests reproduce. On the 10-seed grasp dataset it
 catches 94.6 % of MuJoCo's pre-grasp table collisions, and the additional grasps it rejects lift
 only 39 % when executed, against 81 % for the rest.
+
+## Lift test in Gazebo
+
+`scripts/gazebo_lift_eval.py` repeats the MuJoCo pick-and-lift in headless Gazebo Harmonic (dartsim, 1 ms step) with the
+same free-floating hand, grip force, friction, timing and success test. Each settle and each trial runs its own world
+in-process, in a process of its own, in exact step counts, because Gazebo's transport loses messages when many worlds
+share a loaded machine. Grasps come from the MuJoCo run on the same manifest, which supplies the feasibility skips and
+nothing from its lift outcome. `control` checks the harness first: a 5 cm box lifts, closing on air does not count, and
+contact sensing reports forced hand contact. Each trial records the hand's deviation and contacts per phase, and marks
+an off-path trial that no hand contact explains. Run it under system `python3` with ROS sourced; `run_e10_seed.sh` shows
+the whole sequence.
+
+## Neural meshes and scanned objects
+
+Meshes from other sources go through the same tests, from `~/venv/gen3d_neural` for the mesh work and `~/venv/3d_cem`
+for the rest.
+
+```bash
+python scripts/e12_prompts.py                      # prompts from archetype names, per seed
+python scripts/e12_generate.py --model shap_e --seeds 65   # raw meshes (weights stay outside git)
+bash scripts/run_e12_grade.sh shap_e 65            # clean, build, MuJoCo, Gazebo
+python scripts/summarize_e12.py --model shap_e --seeds 65 --out output/e12/summary_shap_e.json
+
+python scripts/download_gso.py                     # Google Scanned Objects from Gazebo Fuel (CC BY 4.0)
+bash scripts/run_e13.sh                            # both grasp orders on the scans, then summarize_e13.py
+```
+
+`e12_clean_meshes.py` makes one watertight solid: it sets the up axis, scales to the prompted archetype's longest side,
+keeps the largest body and voxel-remeshes what is not closed. `e13_prepare_gso.py` keeps scans at their native scale and
+merges vertices by position first, since texture seams are what leave most scans open. `build_neural_manifest.py` plans
+grasps with the same planner and exports CoACD collision. An object that fails counts as a failure in the summaries.
