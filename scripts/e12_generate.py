@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def shap_e():
     from diffusers import ShapEPipeline
     from diffusers.utils import export_to_ply
-    pipe = ShapEPipeline.from_pretrained("openai/shap-e", torch_dtype=torch.float16, variant="fp16").to("cuda")
+    pipe = ShapEPipeline.from_pretrained("openai/shap-e", torch_dtype=torch.float16).to("cuda")
 
     def run(prompt, seed, out):
         g = torch.Generator("cuda").manual_seed(seed)
