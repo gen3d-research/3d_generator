@@ -89,6 +89,8 @@ def main():
     p.add_argument("--train-with-model", action="store_true",
                    help="Also use --grasp-model inside CEM training: each sample's score "
                         "is multiplied by its best grasp's predicted lift success")
+    p.add_argument("--concave-decomposition", default="hull", choices=["hull", "coacd"],
+                   help="Collision of concave primitives in the exported SDF.")
     p.add_argument("--cem-pool", type=int, default=1,
                    help="CEM generates POOL x top-k objects; with --grasp-model the "
                         "top-k whose best grasp has the highest predicted success "
@@ -105,7 +107,8 @@ def main():
 
     # Mesh collision (not convex hull, not simplified) so the object's collision
     # matches its visual mesh exactly and rests flush on the table in gz.
-    exporter = URDFExporter(ExportConfig(use_convex_hull=False, simplify_collision=False))
+    exporter = URDFExporter(ExportConfig(use_convex_hull=False, simplify_collision=False,
+                                         concave_decomposition=args.concave_decomposition))
     manifest = []
     for method in args.methods:
         print(f"[{method}] generating top-{args.top_k} objects ...")
