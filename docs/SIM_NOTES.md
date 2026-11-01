@@ -87,7 +87,7 @@ Numbers are only comparable within one configuration of
 | submitted paper (3 seeds) | single mesh | 0° | spawn point (pre-fix) | wall clock |
 | corrected re-run 2026-06-10 (`aggregated_corrected.json`) | single mesh | 0° | table top | wall clock |
 | 10,433-variant drop study | single mesh | 0° | table top | wall clock |
-| v2.9 re-run (`aggregated_v29.json`) | per-primitive | 5° | table top | **sim time** |
+| v2.9 re-run (`aggregated_v29.json`), superseded by the 10-seed study | per-primitive | 5° | table top | **sim time** |
 | v2.9 10k study (`gazebo_stability_v29.json`) | per-primitive | 5° | table top | **sim time** |
 | 10-seed study 2026-10-30 (`output/journal_10seed/`, seeds 42–51) | per-primitive | 5° | table top | sim time + `unsettled` excluded, fresh world per 25 objects; collision-aware MoveIt |
 | physics-aware objects 2026-11-01 (`output/physics_aware/`, seeds 52–61, `scripts/run_gazebo_followup.sh`) | per-primitive | 5° | table top | as the 10-seed study |
