@@ -21,14 +21,14 @@ def _load(root, cfg, seed, name):
     return json.load(open(Path(root) / cfg / f"seed_{seed}" / name))["results"]
 
 
-def seed_metrics(root, seed) -> dict:
+def seed_metrics(root, seed, gz_file="gazebo_lift.json") -> dict:
     out = {"seed": seed, "arms": {}}
     pairs = []
     for arm, (cfg, method) in ARMS.items():
-        gz = [r for r in _load(root, cfg, seed, "gazebo_lift.json") if r["method"] == method]
+        gz = [r for r in _load(root, cfg, seed, gz_file) if r["method"] == method]
         mj = {r["name"]: r for r in _load(root, cfg, seed, "mujoco_eval_coacd.json")}
         trials = [t for r in gz for t in r["trials"]]
-        off = [t for t in trials if t.get("hand_err_m", 0.0) > 0.005]
+        kept = [r for r in gz if not (r["trials"] and r["trials"][0].get("off_path"))]
         for r in gz:
             by_rank = {t["rank"]: t for t in mj[r["name"]].get("lift", {}).get("trials", [])}
             pairs += [(bool(t["success"]), bool(by_rank[t["rank"]].get("success", False)))
@@ -40,12 +40,15 @@ def seed_metrics(root, seed) -> dict:
             "gz_lift_first": float(np.mean([r["lift_first"] for r in gz])),
             "gz_lift_any": float(np.mean([r["lift_any"] for r in gz])),
             "mj_lift_first": float(np.mean(mj_first)), "mj_lift_any": float(np.mean(mj_any)),
+            "gz_lift_first_excl_off_path": float(np.mean([r["lift_first"] for r in kept])),
+            "n_objects_excl_off_path": len(kept),
             "n_trials": len(trials), "n_crashed": sum(t["reason"] == "crashed" for t in trials),
-            "n_hand_off_path": len(off)}
+            "n_off_path": sum(bool(t.get("off_path")) for t in trials),
+            "n_unexplained_off_path": sum(bool(t.get("unexplained_off_path")) for t in trials)}
     a = out["arms"]
     n = sum(x["n_trials"] for x in a.values())
     out["n_trials"] = n
-    out["frac_invalid"] = sum(x["n_crashed"] + x["n_hand_off_path"] for x in a.values()) / max(n, 1)
+    out["frac_invalid"] = sum(x["n_crashed"] + x["n_unexplained_off_path"] for x in a.values()) / max(n, 1)
     out["grasp_pairs"] = {"gz_mj_both": sum(g and m for g, m in pairs),
                           "gz_only": sum(g and not m for g, m in pairs),
                           "mj_only": sum(m and not g for g, m in pairs),
@@ -68,26 +71,36 @@ def _p(a, b):
     return float(stats.wilcoxon(a, b).pvalue) if np.any(a != b) else 1.0
 
 
-def study(root, seeds) -> dict:
-    rows = [seed_metrics(root, s) for s in seeds]
-    get = lambda arm, key: np.array([r["arms"][arm][key] for r in rows])   # noqa: E731
-    table = {arm: {k: {"mean": float(get(arm, k).mean()),
-                       "ci95": float(stats.t.ppf(0.975, len(rows) - 1) * get(arm, k).std(ddof=1) / np.sqrt(len(rows)))}
-                   for k in ("gz_lift_first", "gz_lift_any", "mj_lift_first", "mj_lift_any", "has_feasible")}
-             for arm in ARMS}
+def _primary(get, key) -> list[dict]:
+    """The locked comparisons on one metric, Holm-corrected over the two."""
     comps = []
     for label, a, b in (("A: cem_aware vs cem_plain", "cem_aware", "cem_plain"),
                         ("B: cem_aware vs fixed_ranked", "cem_aware", "fixed_ranked")):
-        x, y = get(a, "gz_lift_first"), get(b, "gz_lift_first")
+        x, y = get(a, key), get(b, key)
         comps.append({"comparison": label, "diff": float((x - y).mean()), "p": _p(x, y)})
     order = sorted(range(2), key=lambda i: comps[i]["p"])
     adj = 0.0
     for rank, i in enumerate(order):
         adj = max(adj, min(1.0, (2 - rank) * comps[i]["p"]))
         comps[i]["p_holm"] = adj
+    return comps
+
+
+def study(root, seeds) -> dict:
+    rows = [seed_metrics(root, s) for s in seeds]
+    get = lambda arm, key: np.array([r["arms"][arm][key] for r in rows])   # noqa: E731
+    table = {arm: {k: {"mean": float(get(arm, k).mean()),
+                       "ci95": float(stats.t.ppf(0.975, len(rows) - 1) * get(arm, k).std(ddof=1) / np.sqrt(len(rows)))}
+                   for k in ("gz_lift_first", "gz_lift_any", "mj_lift_first", "mj_lift_any", "has_feasible",
+                             "gz_lift_first_excl_off_path")}
+             for arm in ARMS}
     pairs = {k: sum(r["grasp_pairs"][k] for r in rows) for k in rows[0]["grasp_pairs"]}
     n = sum(pairs.values())
-    return {"seeds": list(seeds), "arms": table, "primary": comps, "grasp_pairs": pairs,
+    return {"seeds": list(seeds), "arms": table, "primary": _primary(get, "gz_lift_first"),
+            "sensitivity_excl_off_path": _primary(get, "gz_lift_first_excl_off_path"),
+            "off_path_share": {arm: float(np.mean([r["arms"][arm]["n_off_path"] / max(r["arms"][arm]["n_trials"], 1)
+                                                   for r in rows])) for arm in ARMS},
+            "grasp_pairs": pairs,
             "agreement": (pairs["gz_mj_both"] + pairs["neither"]) / max(n, 1), "kappa": kappa(pairs),
             "frac_invalid_per_seed": {r["seed"]: r["frac_invalid"] for r in rows}, "per_seed": rows}
 

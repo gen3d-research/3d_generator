@@ -49,6 +49,9 @@ CLOSE_END = 1300
 LIFT_END = 2300
 TRIAL_END = 2800
 WINDOW = 20
+PHASES = ("approach", "close", "lift")
+OFF_PATH_M = 0.005
+PHASE_DEV_M = 0.001
 
 WORLD_SDF = """<?xml version="1.0"?>
 <sdf version="1.10"><world name="{world}">
@@ -111,15 +114,23 @@ def _inertial(mass, pos, i):
             f'<ixx>{i}</ixx><iyy>{i}</iyy><izz>{i}</izz></inertia></inertial>')
 
 
+def unexplained_off_path(hand_err, dev, contact) -> bool:
+    """Off the commanded path, and some phase in which the hand deviated had no hand contact."""
+    return hand_err > OFF_PATH_M and any(d > PHASE_DEV_M and not contact[ph] for ph, d in dev.items())
+
+
+def _sensor(name, collision):
+    return (f'<sensor name="{name}_contact" type="contact"><contact><collision>{collision}</collision>'
+            '</contact></sensor>')
+
+
 def _finger(link, sign, open_q):
     """Finger: joint q = 0 at the pre-shape, positive towards the centre."""
     return f"""
     <link name="{link}"><gravity>false</gravity><pose>0 {sign * open_q:.6f} 0 0 0 0</pose>
       {_inertial(0.05, (0, sign * 0.005, -0.01), 1e-5)}
       {_box(link + '_pad', (0.02, 0.01, 0.04), (0, sign * 0.005, -0.01))}
-      <sensor name="{link}_contact" type="contact">
-        <contact><collision>{link}_pad</collision></contact>
-      </sensor>
+      {_sensor(link, link + '_pad')}
     </link>
     <joint name="{link}_j" type="prismatic"><parent>hand</parent><child>{link}</child>
       <axis><xyz>0 {-sign} 0</xyz><dynamics><damping>5</damping></dynamics>
@@ -137,7 +148,8 @@ def hand_sdf(pre, Rh, open_q):
     <axis><xyz expressed_in="__model__">{up[0]:.9f} {up[1]:.9f} {up[2]:.9f}</xyz>
       <limit><lower>-1</lower><upper>1</upper><effort>1e6</effort></limit></axis></joint>
   <link name="hand"><gravity>false</gravity>{_inertial(0.6, (0, 0, -0.04), 1e-3)}
-    {_box('palm', (0.024, 2 * palm_half, 0.02), (0, 0, -0.04))}</link>
+    {_box('palm', (0.024, 2 * palm_half, 0.02), (0, 0, -0.04))}
+    {_sensor('hand', 'palm')}</link>
   <joint name="approach" type="prismatic"><parent>carriage</parent><child>hand</child>
     <axis><xyz>0 0 1</xyz><limit><lower>-1</lower><upper>1</upper><effort>1e6</effort></limit></axis></joint>
   {_finger('lf', 1, open_q)}
@@ -204,26 +216,30 @@ def run_trial(req, tmpdir) -> dict:
     open_q = min(MAX_OPENING / 2, float(g.get("width", 0.0)) / 2 + PRESHAPE)
     fix = _fixture(object_sdf(req["sdf"], p_o, R_o) + hand_sdf(pre, Rh, open_q), tmpdir, "trial")
 
-    s = {"it": 0, "closed": set(), "held": set(), "z0": None, "z1": None, "hand": None, "joints": None}
+    s = {"it": 0, "closed": set(), "held": set(), "z0": None, "z1": None, "hand": {}, "joints": None,
+         "contact": {ph: set() for ph in PHASES}}
     node = Node()
 
-    def contact(pad):
+    def contact(part):
         def cb(msg):
             it = s["it"]
-            if CLOSE_END - WINDOW < it <= CLOSE_END:
-                key = "closed"
-            elif TRIAL_END - WINDOW < it <= TRIAL_END:
-                key = "held"
-            else:
-                return
+            phase = "approach" if it <= HOLD_END else "close" if it <= CLOSE_END else "lift"
             for k in msg.contact:
-                if "obj" in k.collision1.name or "obj" in k.collision2.name:
-                    s[key].add(pad)
+                names = (k.collision1.name, k.collision2.name)
+                other = ("obj" if any(n.startswith("obj::") for n in names)
+                         else "table" if any(n.startswith("table::") for n in names) else None)
+                if other is None:
+                    continue
+                s["contact"][phase].add(f"{part}:{other}")
+                if other == "obj" and CLOSE_END - WINDOW < it <= CLOSE_END:
+                    s["closed"].add(part)
+                elif other == "obj" and TRIAL_END - WINDOW < it <= TRIAL_END:
+                    s["held"].add(part)
         return cb
 
-    for pad in ("lf", "rf"):
-        topic = f"/world/{WORLD}/model/hand/link/{pad}/sensor/{pad}_contact/contact"
-        node.subscribe(Contacts, topic, contact(pad))
+    for part in ("hand", "lf", "rf"):       # "hand" is the palm's link
+        topic = f"/world/{WORLD}/model/hand/link/{part}/sensor/{part}_contact/contact"
+        node.subscribe(Contacts, topic, contact(part))
 
     def pre_update(info, ecm):
         it = info.iterations + 1          # the step about to run
@@ -240,17 +256,17 @@ def run_trial(req, tmpdir) -> dict:
         j["lift"].set_velocity(ecm, [LIFT / ((LIFT_END - CLOSE_END) * 0.001) if lifting else 0.0])
 
     def post_update(info, ecm):
-        if info.iterations not in (CLOSE_END, TRIAL_END):
+        if info.iterations not in (HOLD_END, CLOSE_END, TRIAL_END):
             return
         world = World(world_entity(ecm))
+        hand = Model(world.model_by_name(ecm, "hand"))
+        s["hand"][info.iterations] = _vec(Link(hand.link_by_name(ecm, "hand")).world_pose(ecm).pos())
         obj = Link(Model(world.model_by_name(ecm, "obj")).canonical_link(ecm))
         z = float(_vec(obj.world_inertial_pose(ecm).pos())[2])
         if info.iterations == CLOSE_END:
             s["z0"] = z
-        else:
+        elif info.iterations == TRIAL_END:
             s["z1"] = z
-            hand = Model(world.model_by_name(ecm, "hand"))
-            s["hand"] = _vec(Link(hand.link_by_name(ecm, "hand")).world_pose(ecm).pos())
 
     fix.on_pre_update(pre_update)
     fix.on_post_update(post_update)
@@ -260,12 +276,19 @@ def run_trial(req, tmpdir) -> dict:
     closed_on = [p in s["closed"] for p in ("lf", "rf")]
     held = [p in s["held"] for p in ("lf", "rf")]
     rise = s["z1"] - s["z0"]
-    hand_err = float(np.linalg.norm(s["hand"] - (c + [0.0, 0.0, LIFT])))
+    h = s["hand"]
+    hand_err = float(np.linalg.norm(h[TRIAL_END] - (c + [0.0, 0.0, LIFT])))
+    # How far the hand left its commanded path in each phase, and what it touched in that phase.
+    dev = {"approach": float(np.linalg.norm(h[HOLD_END] - c)),
+           "close": float(np.linalg.norm(h[CLOSE_END] - h[HOLD_END])),
+           "lift": float(np.linalg.norm(h[TRIAL_END] - h[CLOSE_END] - [0.0, 0.0, LIFT]))}
+    contact = {ph: sorted(v) for ph, v in s["contact"].items()}
     success = bool(rise >= LIFT_FRAC * LIFT and all(held))
     reason = ("ok" if success else "missed" if not any(closed_on)
               else "dropped" if rise < 0.02 else "slipped")
     return {"success": success, "reason": reason, "rise_m": rise, "closed_on": closed_on,
-            "held": held, "hand_err_m": hand_err}
+            "held": held, "hand_err_m": hand_err, "hand_dev_m": dev, "hand_contact": contact,
+            "off_path": hand_err > OFF_PATH_M, "unexplained_off_path": unexplained_off_path(hand_err, dev, contact)}
 
 
 def _child(kind, req, partition, timeout) -> dict:
@@ -361,7 +384,11 @@ def control():
         print("settled", s)
         grasps = {"side": {"center": [0, 0, 0.025], "approach": [1, 0, 0], "axis": [0, 1, 0], "width": 0.05},
                   "top": {"center": [0, 0, 0.025], "approach": [0, 0, -1], "axis": [0, 1, 0], "width": 0.05},
-                  "air": {"center": [0, 0.12, 0.025], "approach": [1, 0, 0], "axis": [0, 1, 0], "width": 0.05}}
+                  "air": {"center": [0, 0.12, 0.025], "approach": [1, 0, 0], "axis": [0, 1, 0], "width": 0.05},
+                  # the palm lands on the box's top face: blocked, palm:obj
+                  "palm_blocked": {"center": [0, 0, 0.005], "approach": [0, 0, -1], "axis": [0, 1, 0], "width": 0.06},
+                  # the pads reach the table beside the box: blocked, pad:table
+                  "pad_on_table": {"center": [0, 0.12, 0.002], "approach": [0, 0, -1], "axis": [0, 1, 0], "width": 0.05}}
         for name, g in grasps.items():
             print(name, _child("trial", {"sdf": str(p), "p": s["p"], "q": s["q"], "grasp": g}, f"{base}_{name}", 300))
 
