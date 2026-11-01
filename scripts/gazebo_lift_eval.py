@@ -2,9 +2,11 @@
 """Physics pick-and-lift in headless Gazebo, the counterpart of mujoco_eval.pick_and_lift.
 
 A free-floating parallel-jaw gripper of the same geometry and masses, friction only, no weld and
-no arm, so the physics engine is the difference. The world stays paused and advances in exact step
-counts, so timing does not depend on machine load. Feasibility comes from the MuJoCo run on the
-same manifest (only which grasps it executed, not their outcome). Each trial re-settles the object.
+no arm, so the physics engine is the difference. Each object settles once; each trial is a world of
+its own, started from that pose in a process of its own, run in-process (gz.sim8) in exact step
+counts: nothing goes through transport discovery, which loses messages when many worlds share a
+loaded machine, and timing does not depend on load. Feasibility comes from the MuJoCo run on the
+same manifest (only which grasps it executed, not their outcome).
 
 Run with ROS 2 sourced, under the system Python (gz bindings):
 
@@ -18,24 +20,14 @@ import argparse
 import json
 import os
 import re
-import signal
 import subprocess
 import sys
 import tempfile
-import threading
-import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import gz.math7  # noqa: F401  (registers the pose types gz.sim8 returns)
 import numpy as np
-from gz.msgs10.boolean_pb2 import Boolean
-from gz.msgs10.contacts_pb2 import Contacts
-from gz.msgs10.double_pb2 import Double
-from gz.msgs10.entity_factory_pb2 import EntityFactory
-from gz.msgs10.entity_pb2 import Entity
-from gz.msgs10.pose_v_pb2 import Pose_V
-from gz.msgs10.world_control_pb2 import WorldControl
-from gz.msgs10.world_stats_pb2 import WorldStatistics
-from gz.transport13 import Node
 
 WORLD = "lift_world"
 TABLE_TOP = 0.4
@@ -46,37 +38,35 @@ PREGRASP = 0.10
 LIFT = 0.10
 LIFT_FRAC = 0.7
 PRESHAPE = 0.015
-HAND_TOL = 0.005
 HOLD_OPEN_N = 5.0
 XY = (0.5, 0.0)
+# Phases in 1 ms steps: settle; approach, hold; close; lift, hold. The last 20 steps of the close and
+# of the final hold are the windows in which pad contact is read.
+SETTLE = 1000
+APPROACH_END = 600
+HOLD_END = 700
+CLOSE_END = 1300
+LIFT_END = 2300
+TRIAL_END = 2800
+WINDOW = 20
 
-WORLD_SDF = f"""<?xml version="1.0"?>
-<sdf version="1.10"><world name="{WORLD}">
+WORLD_SDF = """<?xml version="1.0"?>
+<sdf version="1.10"><world name="{world}">
   <physics type="dart"><max_step_size>0.001</max_step_size><real_time_factor>0</real_time_factor></physics>
   <gravity>0 0 -9.81</gravity>
   <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
-  <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
   <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
   <model name="table"><static>true</static><pose>0.5 0 0.2 0 0 0</pose>
     <link name="table_link"><collision name="collision">
       <geometry><box><size>0.8 0.8 0.4</size></box></geometry>
-      <surface><friction><ode><mu>{MU}</mu><mu2>{MU}</mu2></ode></friction></surface>
+      <surface><friction><ode><mu>{mu}</mu><mu2>{mu}</mu2></ode></friction></surface>
     </collision></link></model>
+  {models}
 </world></sdf>
 """
 
-POSE_PLUGIN = ('<plugin filename="gz-sim-pose-publisher-system" name="gz::sim::systems::PosePublisher">'
-               '<publish_link_pose>true</publish_link_pose><publish_model_pose>true</publish_model_pose>'
-               '<publish_collision_pose>false</publish_collision_pose><publish_visual_pose>false</publish_visual_pose>'
-               '<publish_nested_model_pose>false</publish_nested_model_pose>'
-               '<use_pose_vector_msg>true</use_pose_vector_msg><update_frequency>200</update_frequency></plugin>')
 
-
-class WorldDead(RuntimeError):
-    """The world stopped answering; the chunk restarts in a fresh one."""
-
-
-def _rot_from_quat(q):
+def rot_from_quat(q):
     x, y, z, w = q
     return np.array([
         [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
@@ -84,7 +74,7 @@ def _rot_from_quat(q):
         [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
 
 
-def _rpy_from_rot(R):
+def rpy_from_rot(R):
     p = np.arcsin(np.clip(-R[2, 0], -1, 1))
     if abs(np.cos(p)) > 1e-6:
         return np.arctan2(R[2, 1], R[2, 2]), p, np.arctan2(R[1, 0], R[0, 0])
@@ -103,6 +93,11 @@ def hand_frame(approach, axis):
     return np.column_stack([np.cross(y, z), y, z])
 
 
+def _pose(p, R):
+    r = rpy_from_rot(R)
+    return f"{p[0]:.9f} {p[1]:.9f} {p[2]:.9f} {r[0]:.9f} {r[1]:.9f} {r[2]:.9f}"
+
+
 def _box(name, size, pos):
     s = " ".join(f"{x:.6f}" for x in size)
     return (f'<collision name="{name}"><pose>{pos[0]} {pos[1]} {pos[2]} 0 0 0</pose>'
@@ -117,33 +112,25 @@ def _inertial(mass, pos, i):
 
 def _finger(link, sign, open_q):
     """Finger: joint q = 0 at the pre-shape, positive towards the centre."""
-    y = sign * open_q
-    joint = link + "_j"
     return f"""
-    <link name="{link}"><gravity>false</gravity><pose>0 {y:.6f} 0 0 0 0</pose>
+    <link name="{link}"><gravity>false</gravity><pose>0 {sign * open_q:.6f} 0 0 0 0</pose>
       {_inertial(0.05, (0, sign * 0.005, -0.01), 1e-5)}
       {_box(link + '_pad', (0.02, 0.01, 0.04), (0, sign * 0.005, -0.01))}
       <sensor name="{link}_contact" type="contact">
         <contact><collision>{link}_pad</collision></contact>
       </sensor>
     </link>
-    <joint name="{joint}" type="prismatic"><parent>hand</parent><child>{link}</child>
+    <joint name="{link}_j" type="prismatic"><parent>hand</parent><child>{link}</child>
       <axis><xyz>0 {-sign} 0</xyz><dynamics><damping>5</damping></dynamics>
         <limit><lower>0</lower><upper>{open_q:.6f}</upper><effort>200</effort></limit></axis>
-    </joint>
-    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
-      <joint_name>{joint}</joint_name></plugin>"""
+    </joint>"""
 
 
-def hand_sdf(name, pre, Rh, open_q):
-    rpy = _rpy_from_rot(Rh)
+def hand_sdf(pre, Rh, open_q):
     up = Rh.T @ np.array([0.0, 0.0, 1.0])
     palm_half = MAX_OPENING / 2 + 0.005
-    vel = ('<plugin filename="gz-sim-joint-controller-system" name="gz::sim::systems::JointController">'
-           '<joint_name>{}</joint_name><initial_velocity>0</initial_velocity></plugin>')
-    return f"""<?xml version="1.0"?>
-<sdf version="1.10"><model name="{name}">
-  <pose>{pre[0]:.6f} {pre[1]:.6f} {pre[2]:.6f} {rpy[0]:.6f} {rpy[1]:.6f} {rpy[2]:.6f}</pose>
+    return f"""<model name="hand">
+  <pose>{_pose(pre, Rh)}</pose>
   <link name="carriage"><gravity>false</gravity>{_inertial(0.1, (0, 0, 0), 1e-3)}</link>
   <joint name="lift" type="prismatic"><parent>world</parent><child>carriage</child>
     <axis><xyz expressed_in="__model__">{up[0]:.9f} {up[1]:.9f} {up[2]:.9f}</xyz>
@@ -154,306 +141,204 @@ def hand_sdf(name, pre, Rh, open_q):
     <axis><xyz>0 0 1</xyz><limit><lower>-1</lower><upper>1</upper><effort>1e6</effort></limit></axis></joint>
   {_finger('lf', 1, open_q)}
   {_finger('rf', -1, open_q)}
-  {vel.format('lift')}
-  {vel.format('approach')}
-  {POSE_PLUGIN}
-</model></sdf>"""
+</model>"""
 
 
-def object_sdf(sdf_path: Path) -> tuple[str, np.ndarray]:
-    """A copy of the object's SDF beside the original (relative mesh paths), friction set to MU,
-    publishing its link pose. Returns the path and the centre of mass in the link frame."""
+def object_sdf(sdf_path, p, R) -> str:
+    """The object's model as inline SDF: friction set to MU, absolute mesh paths, the given pose."""
+    sdf_path = Path(sdf_path)
     t = sdf_path.read_text()
-    m = re.search(r"<inertial>.*?<pose>([^<]+)</pose>", t, re.S)
-    com = np.array(m.group(1).split()[:3], float) if m else np.zeros(3)
     t = re.sub(r"<mu>[^<]*</mu>", f"<mu>{MU}</mu>", t)
     t = re.sub(r"<mu2>[^<]*</mu2>", f"<mu2>{MU}</mu2>", t)
-    t = t.replace("</model>", POSE_PLUGIN + "</model>")
-    out = sdf_path.with_name(sdf_path.stem + ".lift.sdf")
-    out.write_text(t)
-    return str(out), com
+    t = re.sub(r"<uri>(?!/|file:)([^<]+)</uri>",
+               lambda m: f"<uri>{(sdf_path.parent / m.group(1)).resolve()}</uri>", t)
+    m = re.search(r"<model\b[^>]*>.*</model>", t, re.S)
+    return re.sub(r"<model\b[^>]*>", f'<model name="obj"><pose>{_pose(p, R)}</pose>', m.group(0), count=1)
 
 
-class World:
-    """One paused gz server on this process's partition, advanced in exact step counts."""
-
-    def __init__(self, tmpdir: str):
-        path = Path(tmpdir) / f"lift_world_{os.getpid()}.sdf"
-        path.write_text(WORLD_SDF)
-        self.log = open(Path(tmpdir) / f"gz_{os.getpid()}.log", "ab")
-        self.proc = subprocess.Popen(["gz", "sim", "-s", str(path)], stdout=self.log,
-                                     stderr=subprocess.STDOUT, start_new_session=True)
-        self.node = Node()
-        self.iterations = -1
-        self.poses = {}
-        self.contacts = {"lf": set(), "rf": set()}
-        self.lock = threading.Lock()
-        self.node.subscribe(WorldStatistics, f"/world/{WORLD}/stats", self._stats)
-        deadline = time.time() + 60
-        while self.iterations < 0:
-            if time.time() > deadline or self.proc.poll() is not None:
-                raise WorldDead("world did not start")
-            time.sleep(0.05)
-
-    def _stats(self, msg):
-        self.iterations = msg.iterations
-
-    def _contact(self, pad, msg):
-        with self.lock:
-            for c in msg.contact:
-                self.contacts[pad].update((c.collision1.name, c.collision2.name))
-
-    def watch_pose(self, model):
-        def cb(msg):
-            with self.lock:
-                for p in msg.pose:
-                    self.poses[p.name] = (np.array([p.position.x, p.position.y, p.position.z]),
-                                          np.array([p.orientation.x, p.orientation.y,
-                                                    p.orientation.z, p.orientation.w]))
-        self.node.subscribe(Pose_V, f"/model/{model}/pose", cb)
-
-    def watch_contacts(self, hand):
-        for pad in ("lf", "rf"):
-            self.node.subscribe(Contacts,
-                                f"/world/{WORLD}/model/{hand}/link/{pad}/sensor/{pad}_contact/contact",
-                                lambda m, pad=pad: self._contact(pad, m))
-
-    def pose(self, name):
-        """A model's pose is in the world frame, a link's (model::link) in its model's frame."""
-        with self.lock:
-            return self.poses.get(name)
-
-    def step(self, n):
-        if self.proc.poll() is not None:
-            raise WorldDead("world exited")
-        target = self.iterations + n
-        req = WorldControl(multi_step=n, pause=True)
-        ok, rep = self.node.request(f"/world/{WORLD}/control", req, WorldControl, Boolean, 10000)
-        if not ok or not rep.data:
-            raise WorldDead("control request failed")
-        deadline = time.time() + max(60.0, n * 0.1)
-        while self.iterations < target:
-            if time.time() > deadline or self.proc.poll() is not None:
-                raise WorldDead("world stopped stepping")
-            time.sleep(0.005)
-        time.sleep(0.03)        # the pose and contact messages of the last steps
-
-    def spawn(self, name, xyz=(0, 0, 0), sdf=None, filename=None):
-        req = EntityFactory(name=name, allow_renaming=False)
-        if sdf is not None:
-            req.sdf = sdf
-        else:
-            req.sdf_filename = filename
-        req.pose.position.x, req.pose.position.y, req.pose.position.z = xyz if sdf is None else (0, 0, 0)
-        if sdf is not None:         # the hand's pose is in its own SDF
-            req.ClearField("pose")
-        ok, rep = self.node.request(f"/world/{WORLD}/create", req, EntityFactory, Boolean, 15000)
-        if not ok or not rep.data:
-            raise WorldDead(f"spawn of {name} failed")
-        self.step(1)
-
-    def remove(self, name):
-        req = Entity(name=name, type=Entity.MODEL)
-        ok, rep = self.node.request(f"/world/{WORLD}/remove", req, Entity, Boolean, 15000)
-        if not ok or not rep.data:
-            raise WorldDead(f"remove of {name} failed")
-        self.step(1)
-
-    def publisher(self, topic, wait=10.0):
-        pub = self.node.advertise(topic, Double)
-        deadline = time.time() + wait
-        while not pub.has_connections():
-            if time.time() > deadline:
-                raise WorldDead(f"no subscriber on {topic}")
-            self.step(1)
-        return pub
-
-    def close(self):
-        try:
-            os.killpg(self.proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        self.proc.wait()
-        self.log.close()
+def _fixture(models, tmpdir, name):
+    from gz.sim8 import TestFixture
+    path = Path(tmpdir) / f"{name}.sdf"
+    path.write_text(WORLD_SDF.format(world=WORLD, mu=MU, models=models))
+    return TestFixture(str(path))
 
 
-def trial(w: World, sdf_file, com, grasp, tag) -> dict:
-    obj, hand = f"obj_{tag}", f"hand_{tag}"
-    w.poses.clear()
-    w.watch_pose(obj)
-    w.spawn(obj, (XY[0], XY[1], TABLE_TOP + 0.002), filename=sdf_file)
-    w.step(1000)
-    pose = w.pose(obj)
-    if pose is None:
-        raise WorldDead("no object pose")
-    p_o, q_o = pose
-    R_o = _rot_from_quat(q_o)
-    Rh = hand_frame(R_o @ np.asarray(grasp["approach"], float), R_o @ np.asarray(grasp["axis"], float))
+def _vec(v):
+    return np.array([v.x(), v.y(), v.z()])
+
+
+def _quat(q):
+    return np.array([q.x(), q.y(), q.z(), q.w()])
+
+
+def settle(req, tmpdir) -> dict:
+    """The object's pose after SETTLE steps from just above the table, upright."""
+    from gz.sim8 import Link, Model, World, world_entity
+    fix = _fixture(object_sdf(req["sdf"], (XY[0], XY[1], TABLE_TOP + 0.002), np.eye(3)), tmpdir, "settle")
+    out = {}
+
+    def post(info, ecm):
+        if info.iterations == SETTLE:
+            model = Model(World(world_entity(ecm)).model_by_name(ecm, "obj"))
+            pose = Link(model.canonical_link(ecm)).world_pose(ecm)
+            out.update(p=_vec(pose.pos()).tolist(), q=_quat(pose.rot()).tolist())
+
+    fix.on_post_update(post)
+    fix.finalize()
+    fix.server().run(True, SETTLE, False)
+    return out
+
+
+def run_trial(req, tmpdir) -> dict:
+    from gz.msgs10.contacts_pb2 import Contacts
+    from gz.sim8 import Joint, Link, Model, World, world_entity
+    from gz.transport13 import Node
+    p_o, R_o = np.array(req["p"]), rot_from_quat(req["q"])
+    g = req["grasp"]
+    Rh = hand_frame(R_o @ np.asarray(g["approach"], float), R_o @ np.asarray(g["axis"], float))
     if Rh is None:
-        w.remove(obj)
         return {"success": False, "reason": "degenerate_frame"}
-    c = p_o + R_o @ np.asarray(grasp["center"], float)
-    a = Rh[:, 2]
-    pre = c - PREGRASP * a
-    open_q = min(MAX_OPENING / 2, float(grasp.get("width", 0.0)) / 2 + PRESHAPE)
+    c = p_o + R_o @ np.asarray(g["center"], float)
+    pre = c - PREGRASP * Rh[:, 2]
+    open_q = min(MAX_OPENING / 2, float(g.get("width", 0.0)) / 2 + PRESHAPE)
+    fix = _fixture(object_sdf(req["sdf"], p_o, R_o) + hand_sdf(pre, Rh, open_q), tmpdir, "trial")
 
-    w.watch_pose(hand)
-    w.watch_contacts(hand)
-    w.spawn(hand, sdf=hand_sdf(hand, pre, Rh, open_q))
-    base = f"/model/{hand}/joint"
-    v_lift = w.publisher(f"{base}/lift/cmd_vel")
-    v_app = w.publisher(f"{base}/approach/cmd_vel")
-    fingers = [w.publisher(f"{base}/{f}_j/cmd_force") for f in ("lf", "rf")]
+    s = {"it": 0, "closed": set(), "held": set(), "z0": None, "z1": None, "hand": None, "joints": None}
+    node = Node()
 
-    def send(pub, value):
-        pub.publish(Double(data=float(value)))
+    def contact(pad):
+        def cb(msg):
+            it = s["it"]
+            if CLOSE_END - WINDOW < it <= CLOSE_END:
+                key = "closed"
+            elif TRIAL_END - WINDOW < it <= TRIAL_END:
+                key = "held"
+            else:
+                return
+            for k in msg.contact:
+                if "obj" in k.collision1.name or "obj" in k.collision2.name:
+                    s[key].add(pad)
+        return cb
 
-    def forces(value):
-        for f in fingers:
-            send(f, value)
-        time.sleep(0.05)
+    for pad in ("lf", "rf"):
+        topic = f"/world/{WORLD}/model/hand/link/{pad}/sensor/{pad}_contact/contact"
+        node.subscribe(Contacts, topic, contact(pad))
 
-    def com_z():
-        p, q = w.pose(obj)
-        return float(p[2] + (_rot_from_quat(q) @ com)[2])
+    def pre_update(info, ecm):
+        it = info.iterations + 1          # the step about to run
+        s["it"] = it
+        if s["joints"] is None:
+            model = Model(World(world_entity(ecm)).model_by_name(ecm, "hand"))
+            s["joints"] = {n: Joint(model.joint_by_name(ecm, n)) for n in ("lift", "approach", "lf_j", "rf_j")}
+        j = s["joints"]
+        force = -HOLD_OPEN_N if it <= HOLD_END else GRIP_N
+        j["lf_j"].set_force(ecm, [force])
+        j["rf_j"].set_force(ecm, [force])
+        j["approach"].set_velocity(ecm, [PREGRASP / (APPROACH_END * 0.001) if it <= APPROACH_END else 0.0])
+        lifting = CLOSE_END < it <= LIFT_END
+        j["lift"].set_velocity(ecm, [LIFT / ((LIFT_END - CLOSE_END) * 0.001) if lifting else 0.0])
 
-    forces(-HOLD_OPEN_N)
-    send(v_app, PREGRASP / 0.6)
-    time.sleep(0.05)
-    w.step(600)
-    send(v_app, 0.0)
-    time.sleep(0.05)
-    w.step(100)
-    forces(GRIP_N)
-    w.step(580)
-    with w.lock:
-        w.contacts["lf"].clear()
-        w.contacts["rf"].clear()
-    w.step(20)
-    with w.lock:
-        closed_on = [any(obj in n for n in w.contacts[f]) for f in ("lf", "rf")]
-    z0 = com_z()
-    send(v_lift, LIFT / 1.0)
-    time.sleep(0.05)
-    w.step(1000)
-    send(v_lift, 0.0)
-    time.sleep(0.05)
-    w.step(480)
-    with w.lock:
-        w.contacts["lf"].clear()
-        w.contacts["rf"].clear()
-    w.step(20)
-    with w.lock:
-        held = [any(obj in n for n in w.contacts[f]) for f in ("lf", "rf")]
-    rise = com_z() - z0
-    # The hand's origin should be at the grasp centre after the approach, LIFT higher after the lift.
-    hand_end = w.pose(hand)[0] + Rh @ w.pose(f"{hand}::hand")[0]   # the carriage is canonical
-    hand_err = float(np.linalg.norm(hand_end - (c + [0.0, 0.0, LIFT])))
+    def post_update(info, ecm):
+        if info.iterations not in (CLOSE_END, TRIAL_END):
+            return
+        world = World(world_entity(ecm))
+        obj = Link(Model(world.model_by_name(ecm, "obj")).canonical_link(ecm))
+        z = float(_vec(obj.world_inertial_pose(ecm).pos())[2])
+        if info.iterations == CLOSE_END:
+            s["z0"] = z
+        else:
+            s["z1"] = z
+            hand = Model(world.model_by_name(ecm, "hand"))
+            s["hand"] = _vec(Link(hand.link_by_name(ecm, "hand")).world_pose(ecm).pos())
+
+    fix.on_pre_update(pre_update)
+    fix.on_post_update(post_update)
+    fix.finalize()
+    server = fix.server()
+    server.run(True, TRIAL_END, False)
+    closed_on = [p in s["closed"] for p in ("lf", "rf")]
+    held = [p in s["held"] for p in ("lf", "rf")]
+    rise = s["z1"] - s["z0"]
+    hand_err = float(np.linalg.norm(s["hand"] - (c + [0.0, 0.0, LIFT])))
     success = bool(rise >= LIFT_FRAC * LIFT and all(held))
-    if success:
-        reason = "ok"
-    elif not any(closed_on):
-        reason = "missed"
-    elif rise < 0.02:
-        reason = "dropped"
-    else:
-        reason = "slipped"
-    w.remove(hand)
-    w.remove(obj)
+    reason = ("ok" if success else "missed" if not any(closed_on)
+              else "dropped" if rise < 0.02 else "slipped")
     return {"success": success, "reason": reason, "rise_m": rise, "closed_on": closed_on,
             "held": held, "hand_err_m": hand_err}
 
 
-def eval_chunk(chunk, tmpdir, tag_base=0) -> list[dict]:
-    """Objects in order, restarting the world after a crash; a trial crashed twice is recorded."""
-    results, w = [], None
+def _child(kind, req, partition, timeout) -> dict:
+    """One settle or trial in a process of its own; a crash or hang costs only that trial."""
+    env = dict(os.environ, GZ_PARTITION=partition)
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(req, f)
     try:
-        for i, e in enumerate(chunk):
-            sdf_file, com = object_sdf(Path(e["sdf"]))
-            trials = []
-            for rank in e["ranks"]:
-                grasp = e["grasps"][rank]
-                rec = None
-                for attempt in range(2):
-                    try:
-                        if w is None:
-                            w = World(tmpdir)
-                        rec = trial(w, sdf_file, com, grasp, f"{tag_base + i}_{rank}_{attempt}")
-                        break
-                    except WorldDead as err:
-                        rec = {"success": False, "reason": "crashed", "error": str(err)}
-                        if w is not None:
-                            w.close()
-                        w = None
-                rec["rank"] = rank
-                trials.append(rec)
-            succ = [t["success"] for t in trials]
-            results.append({"name": e["name"], "method": e["method"], "has_feasible": bool(trials),
-                            "lift_first": bool(succ[0]) if succ else False,
-                            "lift_any": bool(any(succ)), "trials": trials})
+        r = subprocess.run([sys.executable, __file__, "--child", kind, "--req", f.name], env=env,
+                           capture_output=True, timeout=timeout, text=True)
+    except subprocess.TimeoutExpired:
+        return {"crash": "timeout"}
     finally:
-        if w is not None:
-            w.close()
-    return results
+        os.unlink(f.name)
+    for line in reversed(r.stdout.splitlines()):
+        if line.startswith("RESULT "):
+            return json.loads(line[7:])
+    return {"crash": f"exit {r.returncode}: {r.stderr[-200:]}"}
 
 
-def _worker(args):
-    chunk = json.load(open(args.chunk_in))
-    res = eval_chunk(chunk, str(Path(args.chunk_out).parent))
-    json.dump({"results": res}, open(args.chunk_out, "w"))
+def eval_object(e, timeout) -> dict:
+    tag = f"{os.getpid()}_{e['method']}_{e['name']}"
+    trials = []
+    settled = None
+    for attempt in range(3):
+        settled = _child("settle", {"sdf": e["sdf"]}, f"lift_{tag}_s{attempt}", timeout)
+        if "crash" not in settled:
+            break
+    for rank in e["ranks"]:
+        if "crash" in settled:
+            trials.append({"rank": rank, "success": False, "reason": "crashed", "errors": [settled["crash"]]})
+            continue
+        req = {"sdf": e["sdf"], "p": settled["p"], "q": settled["q"], "grasp": e["grasps"][rank]}
+        errors = []
+        for attempt in range(3):
+            rec = _child("trial", req, f"lift_{tag}_{rank}_{attempt}", timeout)
+            if "crash" not in rec:
+                break
+            errors.append(rec.pop("crash"))
+            rec = {"success": False, "reason": "crashed"}
+        rec["rank"] = rank
+        if errors:
+            rec["errors"] = errors
+        trials.append(rec)
+    succ = [t["success"] for t in trials]
+    return {"name": e["name"], "method": e["method"], "has_feasible": bool(trials),
+            "lift_first": bool(succ[0]) if succ else False, "lift_any": bool(any(succ)), "trials": trials}
 
 
-def _run_all(args):
+def run_all(args):
     man = json.load(open(args.manifest))
     if args.methods:
         man = [e for e in man if e["method"] in args.methods]
     mj = {r["name"]: r for r in json.load(open(args.mujoco))["results"]}
-    entries = []
-    for e in man:
-        trials = mj[e["name"]].get("lift", {}).get("trials", [])
-        entries.append({"name": e["name"], "method": e["method"], "sdf": e["sdf"],
-                        "grasps": e.get("grasps", []), "ranks": [t["rank"] for t in trials]})
+    entries = [{"name": e["name"], "method": e["method"], "sdf": e["sdf"], "grasps": e.get("grasps", []),
+                "ranks": [t["rank"] for t in mj[e["name"]].get("lift", {}).get("trials", [])]} for e in man]
     out = Path(args.out)
-    chunks_dir = out.parent / f"_lift_{out.stem}"
-    chunks_dir.mkdir(parents=True, exist_ok=True)
-    chunks = [entries[i:i + args.chunk] for i in range(0, len(entries), args.chunk)]
-    paths = []
-    for j, c in enumerate(chunks):
-        json.dump(c, open(chunks_dir / f"in_{j:04d}.json", "w"))
-        paths.append((chunks_dir / f"in_{j:04d}.json", chunks_dir / f"out_{j:04d}.json"))
-    pending = [(i, o) for i, o in paths if not o.exists()]
-    base = os.environ.get("GZ_PARTITION", "gen3d")
-    slots = {}
-    free = list(range(args.workers))
-    while pending or slots:
-        while pending and free:
-            i, o = pending.pop(0)
-            s = free.pop()
-            env = dict(os.environ, GZ_PARTITION=f"{base}_lift{os.getpid()}_{s}")
-            log = open(o.with_suffix(".log"), "ab")
-            p = subprocess.Popen([sys.executable, __file__, "--chunk-in", str(i), "--chunk-out", str(o)],
-                                 env=env, stdout=log, stderr=subprocess.STDOUT)
-            slots[p] = (s, o, log, time.time())
-        for p in list(slots):
-            s, o, log, t0 = slots[p]
-            if p.poll() is not None or time.time() - t0 > args.chunk_timeout:
-                if p.poll() is None:
-                    p.kill()
-                    p.wait()
-                log.close()
-                free.append(s)
-                del slots[p]
-                print(f"[lift] {o.name} exit={p.returncode} {time.time() - t0:.0f}s", flush=True)
-        time.sleep(0.5)
-    merged, missing = [], 0
-    for _, o in paths:
-        if o.exists():
-            merged += json.load(open(o))["results"]
-        else:
-            missing += 1
-    json.dump({"results": merged, "missing_chunks": missing, "friction": MU, "grip_n": GRIP_N},
-              open(out, "w"), indent=1)
-    print(f"[lift] merged {len(merged)} results, {missing} chunks missing -> {out}", flush=True)
+    ckpt = out.parent / f"_lift_{out.stem}"
+    ckpt.mkdir(parents=True, exist_ok=True)
+
+    def work(e):
+        path = ckpt / f"{e['name']}.json"
+        if path.exists():
+            return json.load(open(path))
+        res = eval_object(e, args.trial_timeout)
+        path.write_text(json.dumps(res))
+        n = sum(t["reason"] == "crashed" for t in res["trials"])
+        print(f"[lift] {e['name']} {len(res['trials'])} trials, {n} crashed", flush=True)
+        return res
+
+    with ThreadPoolExecutor(args.workers) as ex:
+        results = list(ex.map(work, entries))
+    json.dump({"results": results, "friction": MU, "grip_n": GRIP_N}, open(out, "w"), indent=1)
+    print(f"[lift] merged {len(results)} results -> {out}", flush=True)
 
 
 CONTROL_BOX = """<?xml version="1.0"?>
@@ -465,23 +350,28 @@ CONTROL_BOX = """<?xml version="1.0"?>
 """
 
 
-def _control():
-    """A central side grasp must lift the box; a grasp beside it must close on air."""
+def control():
+    """A central side or top grasp must lift the box; a grasp beside it must close on air."""
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "box.sdf"
         p.write_text(CONTROL_BOX)
-        sdf_file, com = object_sdf(p)
-        good = {"center": [0, 0, 0.025], "approach": [1, 0, 0], "axis": [0, 1, 0], "width": 0.05}
-        air = {"center": [0, 0.12, 0.025], "approach": [1, 0, 0], "axis": [0, 1, 0], "width": 0.05}
-        top = {"center": [0, 0, 0.025], "approach": [0, 0, -1], "axis": [0, 1, 0], "width": 0.05}
-        w = World(tmp)
-        try:
-            for name, g in (("side", good), ("top", top), ("air", air)):
-                t0 = time.time()
-                r = trial(w, sdf_file, com, g, f"c_{name}")
-                print(name, f"{time.time() - t0:.1f}s", r, flush=True)
-        finally:
-            w.close()
+        base = "lift_control"
+        s = _child("settle", {"sdf": str(p)}, base + "_s", 300)
+        print("settled", s)
+        grasps = {"side": {"center": [0, 0, 0.025], "approach": [1, 0, 0], "axis": [0, 1, 0], "width": 0.05},
+                  "top": {"center": [0, 0, 0.025], "approach": [0, 0, -1], "axis": [0, 1, 0], "width": 0.05},
+                  "air": {"center": [0, 0.12, 0.025], "approach": [1, 0, 0], "axis": [0, 1, 0], "width": 0.05}}
+        for name, g in grasps.items():
+            print(name, _child("trial", {"sdf": str(p), "p": s["p"], "q": s["q"], "grasp": g}, f"{base}_{name}", 300))
+
+
+def child(args):
+    req = json.load(open(args.req))
+    with tempfile.TemporaryDirectory() as tmp:
+        res = settle(req, tmp) if args.child == "settle" else run_trial(req, tmp)
+    print("RESULT " + json.dumps(res), flush=True)
+    sys.stdout.flush()
+    os._exit(0)     # skip gz teardown: nothing depends on it
 
 
 def main():
@@ -491,18 +381,17 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--methods", nargs="+")
     ap.add_argument("--workers", type=int, default=8)
-    ap.add_argument("--chunk", type=int, default=25)
-    ap.add_argument("--chunk-timeout", type=float, default=3600)
-    ap.add_argument("--chunk-in")
-    ap.add_argument("--chunk-out")
+    ap.add_argument("--trial-timeout", type=float, default=600)
+    ap.add_argument("--child", choices=["settle", "trial"])
+    ap.add_argument("--req")
     ap.add_argument("--control", action="store_true")
     args = ap.parse_args()
     if args.control:
-        _control()
-    elif args.chunk_in:
-        _worker(args)
+        control()
+    elif args.child:
+        child(args)
     else:
-        _run_all(args)
+        run_all(args)
 
 
 if __name__ == "__main__":

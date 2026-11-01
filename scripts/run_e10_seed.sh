@@ -30,7 +30,9 @@ for CFG in plain ranked select; do
       --workers "${MJ_WORKERS:-8}" > "$OUT/$CFG/seed_$S/mujoco.log" 2>&1
   echo "[e10 $CFG $S] mujoco exit=$?"
 done
+set +u
 source "${ROS_SETUP:-/opt/ros/jazzy/setup.bash}" 2>/dev/null
+set -u
 for CFG in plain ranked select; do
   D="$OUT/$CFG/seed_$S"
   [ -s "$D/gazebo_lift.json" ] || python3 scripts/gazebo_lift_eval.py --manifest "$D/eval_manifest.json" \
