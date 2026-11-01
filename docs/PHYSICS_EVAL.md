@@ -109,6 +109,27 @@ python3 -m venv ~/venv/gen3d_learn
     --data output/grasp_dataset/journal.npz --split source --out output/grasp_predictor/run0
 ```
 
+## Predictor in the generator
+
+The numpy predictor (`src/grasp_predictor.py`, weights exported as `model.npz`) can steer generation
+in three places; `scripts/run_physics_aware_study.sh` runs them as configs (`CONFIGS`, `METHODS`).
+
+| Config | What changes | Option |
+|---|---|---|
+| `grasps` | each object's grasps are re-ranked, with the table check | `--table-check --grasp-model M` |
+| `select` | `grasps`, and the CEM keeps the top-k of a pool by best predicted grasp | `--cem-pool POOL` |
+| `train` | `grasps`, and the CEM selects elites on score x predicted lift | `--train-with-model` |
+| `train_select` | `train` and `select` together | both |
+
+In code, `GeneratorConfig(grasp_model=path)` sets the training objective. Train the predictor on
+objects disjoint from the graded seeds, and grade under perturbed physics as the script does, so
+the result does not rest on the physics the labels came from.
+
+`GeneratorConfig(cem_workers=n)` / `CEMConfig(n_workers=n)` sample and score in `n` forked workers,
+each sample with its own seed stream, so the result does not depend on `n`. It differs from the
+serial path (`n_workers=1`), which draws from one stream and is the published path.
+`scripts/benchmark_throughput.py` measures both objectives on 1 to 32 cores.
+
 ## Planner hand-versus-table check
 
 `grasp_planner.gripper_min_z()` sweeps the same gripper geometry from the pre-grasp to the grasp

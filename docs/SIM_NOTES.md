@@ -25,6 +25,9 @@ Consequences to be aware of:
   perturbation (toppling metastable objects, stopping spheres from rolling). Native
   contacts behave like ideal rigid bodies — see the spawn tilt below.
 - Legacy single-mesh collision: `ExportConfig(per_primitive_collision=False)`.
+- Decomposed concave collision (opt-in): `ExportConfig(concave_decomposition="coacd")` replaces each
+  concave primitive's hull with CoACD convex pieces. `scripts/build_collision_pair_manifests.py` exports
+  the same objects both ways for a paired comparison.
 
 ## Drop-test (dynamic stability) semantics
 
@@ -87,6 +90,8 @@ Numbers are only comparable within one configuration of
 | v2.9 re-run (`aggregated_v29.json`) | per-primitive | 5° | table top | **sim time** |
 | v2.9 10k study (`gazebo_stability_v29.json`) | per-primitive | 5° | table top | **sim time** |
 | 10-seed study 2026-10-30 (`output/journal_10seed/`, seeds 42–51) | per-primitive | 5° | table top | sim time + `unsettled` excluded, fresh world per 25 objects; collision-aware MoveIt |
+| physics-aware objects 2026-11-01 (`output/physics_aware/`, seeds 52–61, `scripts/run_gazebo_followup.sh`) | per-primitive | 5° | table top | as the 10-seed study |
+| paired collision 2026-11-01 (`output/gazebo_coacd/`, seeds 42–51, objects with concave primitives only) | hull vs CoACD | 5° | table top | as the 10-seed study |
 
 The 10-seed study also carries MuJoCo results (`mujoco_eval*.json`, see `docs/PHYSICS_EVAL.md`).
 Its manifests, like every earlier result set, were built before the planner's surface sampling was
