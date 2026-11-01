@@ -466,19 +466,21 @@ class CEMConfig:
     learning_rate: float = 0.7    # Interpolation with old distribution
     min_std: float = 0.1          # Minimum standard deviation
     seed: int = 42
-    # Worker processes for scoring. 1 keeps the published serial path. Above 1,
-    # each sample's scoring gets its own seed for the sampling inside the scorer,
-    # so results depend on the seed and not on the number of workers (2, 4, ...).
+    # Worker processes for sampling and scoring. 1 keeps the published serial path.
+    # Above 1, each sample gets its own seed, including for the sampling inside the
+    # scorer, so results depend on the seed and not on the number of workers.
     n_workers: int = 1
 
 
-_worker_evaluate = None       # inherited by forked scoring workers
+_worker_job = None            # (distribution, evaluate), inherited by forked workers
 
 
-def _evaluate_seeded(job):
-    seed, obj = job
+def _sample_and_evaluate(job):
+    seed, name = job
+    distribution, evaluate = _worker_job
+    obj = distribution.sample_object(np.random.default_rng(seed), name=name)
     np.random.seed(seed)
-    return _worker_evaluate(obj)
+    return (obj, *evaluate(obj))
 
 
 class CEMOptimizer:
@@ -504,20 +506,23 @@ class CEMOptimizer:
         # History for analysis
         self.history: List[Dict] = []
 
-    def _evaluate(self, objects: List[CompositeObject], iteration: int) -> List[tuple]:
-        """(breakdown, selection score) for each object, serially or in forked workers."""
+    def _sample_generation(self, iteration: int) -> List[tuple]:
+        """(object, breakdown, selection score) per sample, serially or in forked workers."""
         def evaluate(obj):
             breakdown = self.scorer.score(obj)
             return breakdown, (breakdown.total_score if self.objective is None
                                else self.objective(obj, breakdown))
 
+        names = [f"iter{iteration}_sample{i}" for i in range(self.config.n_samples)]
         if self.config.n_workers <= 1:
-            return [evaluate(o) for o in objects]
-        global _worker_evaluate
-        _worker_evaluate = evaluate
-        jobs = [([self.config.seed, iteration, i], o) for i, o in enumerate(objects)]
+            return [(obj, *evaluate(obj)) for obj in
+                    (self.distribution.sample_object(self.rng, name=n) for n in names)]
+        global _worker_job
+        _worker_job = (self.distribution, evaluate)
+        jobs = [([self.config.seed, iteration, i], n) for i, n in enumerate(names)]
+        chunk = max(1, len(jobs) // (4 * self.config.n_workers))
         with mp.get_context("fork").Pool(self.config.n_workers) as pool:
-            return pool.map(_evaluate_seeded, jobs, chunksize=1)
+            return pool.map(_sample_and_evaluate, jobs, chunksize=chunk)
 
     def optimize(self,
                  callback: Optional[Callable[[int, float, ParameterDistribution], None]] = None
@@ -536,12 +541,10 @@ class CEMOptimizer:
 
         for iteration in range(self.config.n_iterations):
             # Sample candidates
-            candidates = [self.distribution.sample_object(
-                              self.rng, name=f"iter{iteration}_sample{i}")
-                          for i in range(self.config.n_samples)]
-            evaluated = self._evaluate(candidates, iteration)
-            score_breakdowns = [b for b, _ in evaluated]
-            scores = np.array([s for _, s in evaluated])
+            generation = self._sample_generation(iteration)
+            candidates = [g[0] for g in generation]
+            score_breakdowns = [g[1] for g in generation]
+            scores = np.array([g[2] for g in generation])
 
             # Select elite samples
             elite_indices = np.argsort(scores)[-n_elite:]
