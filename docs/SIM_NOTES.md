@@ -112,6 +112,5 @@ the spawn pose). `settle()` now waits on `/world/<W>/stats` **simulation time** 
 wall-clock result sets above were produced on an idle machine and spot-verified, but
 any future run is load-independent by construction.
 
-Cross-config robustness: the method ranking (CEM the only top-tier-on-all-three) is
-identical under the corrected mesh-collision config (CEM 97.7/98.7/92.0) and the v2.9
-config (CEM 98.0/97.3/88.0).
+Cross-config: CEM scores 97.7/98.7/92.0 under the corrected mesh-collision config and
+98.0/97.3/88.0 under the v2.9 config.
