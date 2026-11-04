@@ -37,7 +37,7 @@ def shap_e():
 
 def trellis():
     os.environ.setdefault("SPCONV_ALGO", "native")
-    os.environ.setdefault("ATTN_BACKEND", "xformers")
+    os.environ.setdefault("ATTN_BACKEND", "sdpa")     # local patch; xformers has no kernels for this torch
     sys.path.insert(0, str(ROOT / "output/e12/src/TRELLIS"))
     from trellis.pipelines import TrellisTextTo3DPipeline
     import trimesh
@@ -54,8 +54,29 @@ def trellis():
     return run
 
 
+def _dinov2_keys(sd):
+    """Hunyuan3D-2's DINOv2 weights use transformers 4 names; transformers 5 renamed the attention and SwiGLU layers."""
+    out = {}
+    for k, v in sd.items():
+        if ".mlp.weights_in." in k:
+            gate, up = v.chunk(2, dim=0)    # transformers 4: x1, x2 = weights_in(x).chunk(2, -1); silu(x1) * x2
+            out[k.replace(".weights_in.", ".gate_proj.")] = gate
+            out[k.replace(".weights_in.", ".up_proj.")] = up
+            continue
+        for a, b in ((".attention.attention.query.", ".attention.q_proj."),
+                     (".attention.attention.key.", ".attention.k_proj."),
+                     (".attention.attention.value.", ".attention.v_proj."),
+                     (".attention.output.dense.", ".attention.o_proj."), (".mlp.weights_out.", ".mlp.down_proj.")):
+            k = k.replace(a, b)
+        out[k] = v
+    return out
+
+
 def hunyuan():
     sys.path.insert(0, str(ROOT / "output/e12/src/Hunyuan3D-2"))
+    from hy3dgen.shapegen.models import conditioner
+    for cls in (conditioner.SingleImageEncoder, conditioner.DualImageEncoder):
+        cls.load_state_dict = lambda self, sd, *a, **kw: torch.nn.Module.load_state_dict(self, _dinov2_keys(sd), *a, **kw)
     from hy3dgen.rembg import BackgroundRemover
     from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
     from hy3dgen.text2image import HunyuanDiTPipeline

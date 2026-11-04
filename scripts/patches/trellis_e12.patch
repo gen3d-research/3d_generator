@@ -1,0 +1,187 @@
+diff --git a/trellis/modules/sparse/__init__.py b/trellis/modules/sparse/__init__.py
+index 726756c..2f913cf 100755
+--- a/trellis/modules/sparse/__init__.py
++++ b/trellis/modules/sparse/__init__.py
+@@ -21,7 +21,7 @@ def __from_env():
+         BACKEND = env_sparse_backend
+     if env_sparse_debug is not None:
+         DEBUG = env_sparse_debug == '1'
+-    if env_sparse_attn is not None and env_sparse_attn in ['xformers', 'flash_attn']:
++    if env_sparse_attn is not None and env_sparse_attn in ['xformers', 'flash_attn', 'sdpa']:
+         ATTN = env_sparse_attn
+         
+     print(f"[SPARSE] Backend: {BACKEND}, Attention: {ATTN}")
+diff --git a/trellis/modules/sparse/attention/full_attn.py b/trellis/modules/sparse/attention/full_attn.py
+index e9e27ae..1243cc1 100755
+--- a/trellis/modules/sparse/attention/full_attn.py
++++ b/trellis/modules/sparse/attention/full_attn.py
+@@ -7,6 +7,8 @@ if ATTN == 'xformers':
+     import xformers.ops as xops
+ elif ATTN == 'flash_attn':
+     import flash_attn
++elif ATTN == 'sdpa':
++    from .sdpa_varlen import sdpa_dense, sdpa_varlen
+ else:
+     raise ValueError(f"Unknown attention module: {ATTN}")
+ 
+@@ -206,6 +208,12 @@ def sparse_scaled_dot_product_attention(*args, **kwargs):
+             out = flash_attn.flash_attn_varlen_kvpacked_func(q, kv, cu_seqlens_q, cu_seqlens_kv, max(q_seqlen), max(kv_seqlen))
+         elif num_all_args == 3:
+             out = flash_attn.flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max(q_seqlen), max(kv_seqlen))
++    elif ATTN == 'sdpa':
++        if num_all_args == 1:
++            q, k, v = qkv.unbind(dim=1)
++        elif num_all_args == 2:
++            k, v = kv.unbind(dim=1)
++        out = sdpa_varlen(q, k, v, q_seqlen, kv_seqlen)
+     else:
+         raise ValueError(f"Unknown attention module: {ATTN}")
+     
+diff --git a/trellis/modules/sparse/attention/sdpa_varlen.py b/trellis/modules/sparse/attention/sdpa_varlen.py
+new file mode 100644
+index 0000000..6d35992
+--- /dev/null
++++ b/trellis/modules/sparse/attention/sdpa_varlen.py
+@@ -0,0 +1,19 @@
++# Local E12 patch, not upstream: attention through torch's scaled_dot_product_attention, for a torch and GPU that
++# neither the installed xformers nor flash_attn has kernels for.
++import torch.nn.functional as F
++
++
++def sdpa_dense(q, k, v):
++    """[B, N, H, C] inputs, as xformers.memory_efficient_attention takes them."""
++    return F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2)
++
++
++def sdpa_varlen(q, k, v, q_seqlen, kv_seqlen):
++    """[T, H, C] inputs holding sequences back to back; each query attends only within its own sequence."""
++    out = q.new_empty(q.shape[0], q.shape[1], v.shape[-1])
++    qs = ks = 0
++    for lq, lk in zip(q_seqlen, kv_seqlen):
++        out[qs:qs + lq] = sdpa_dense(q[None, qs:qs + lq], k[None, ks:ks + lk], v[None, ks:ks + lk])[0]
++        qs += lq
++        ks += lk
++    return out
+diff --git a/trellis/modules/sparse/attention/serialized_attn.py b/trellis/modules/sparse/attention/serialized_attn.py
+index 5950b75..a05c25e 100755
+--- a/trellis/modules/sparse/attention/serialized_attn.py
++++ b/trellis/modules/sparse/attention/serialized_attn.py
+@@ -9,6 +9,8 @@ if ATTN == 'xformers':
+     import xformers.ops as xops
+ elif ATTN == 'flash_attn':
+     import flash_attn
++elif ATTN == 'sdpa':
++    from .sdpa_varlen import sdpa_dense, sdpa_varlen
+ else:
+     raise ValueError(f"Unknown attention module: {ATTN}")
+ 
+@@ -168,6 +170,9 @@ def sparse_serialized_scaled_dot_product_self_attention(
+             out = xops.memory_efficient_attention(q, k, v)          # [B, N, H, C]
+         elif ATTN == 'flash_attn':
+             out = flash_attn.flash_attn_qkvpacked_func(qkv_feats)   # [B, N, H, C]
++        elif ATTN == 'sdpa':
++            q, k, v = qkv_feats.unbind(dim=2)                       # [B, N, H, C]
++            out = sdpa_dense(q, k, v)                               # [B, N, H, C]
+         else:
+             raise ValueError(f"Unknown attention module: {ATTN}")
+         out = out.reshape(B * N, H, C)                              # [M, H, C]
+@@ -183,6 +188,9 @@ def sparse_serialized_scaled_dot_product_self_attention(
+             cu_seqlens = torch.cat([torch.tensor([0]), torch.cumsum(torch.tensor(seq_lens), dim=0)], dim=0) \
+                         .to(qkv.device).int()
+             out = flash_attn.flash_attn_varlen_qkvpacked_func(qkv_feats, cu_seqlens, max(seq_lens)) # [M, H, C]
++        elif ATTN == 'sdpa':
++            q, k, v = qkv_feats.unbind(dim=1)                       # [M, H, C]
++            out = sdpa_varlen(q, k, v, seq_lens, seq_lens)          # [M, H, C]
+ 
+     out = out[bwd_indices]      # [T, H, C]
+ 
+diff --git a/trellis/modules/sparse/attention/windowed_attn.py b/trellis/modules/sparse/attention/windowed_attn.py
+index cd642c5..c1074d4 100755
+--- a/trellis/modules/sparse/attention/windowed_attn.py
++++ b/trellis/modules/sparse/attention/windowed_attn.py
+@@ -8,6 +8,8 @@ if ATTN == 'xformers':
+     import xformers.ops as xops
+ elif ATTN == 'flash_attn':
+     import flash_attn
++elif ATTN == 'sdpa':
++    from .sdpa_varlen import sdpa_dense, sdpa_varlen
+ else:
+     raise ValueError(f"Unknown attention module: {ATTN}")
+ 
+@@ -110,6 +112,9 @@ def sparse_windowed_scaled_dot_product_self_attention(
+             out = xops.memory_efficient_attention(q, k, v)          # [B, N, H, C]
+         elif ATTN == 'flash_attn':
+             out = flash_attn.flash_attn_qkvpacked_func(qkv_feats)   # [B, N, H, C]
++        elif ATTN == 'sdpa':
++            q, k, v = qkv_feats.unbind(dim=2)                       # [B, N, H, C]
++            out = sdpa_dense(q, k, v)                               # [B, N, H, C]
+         else:
+             raise ValueError(f"Unknown attention module: {ATTN}")
+         out = out.reshape(B * N, H, C)                              # [M, H, C]
+@@ -125,6 +130,9 @@ def sparse_windowed_scaled_dot_product_self_attention(
+             cu_seqlens = torch.cat([torch.tensor([0]), torch.cumsum(torch.tensor(seq_lens), dim=0)], dim=0) \
+                         .to(qkv.device).int()
+             out = flash_attn.flash_attn_varlen_qkvpacked_func(qkv_feats, cu_seqlens, max(seq_lens)) # [M, H, C]
++        elif ATTN == 'sdpa':
++            q, k, v = qkv_feats.unbind(dim=1)                       # [M, H, C]
++            out = sdpa_varlen(q, k, v, seq_lens, seq_lens)          # [M, H, C]
+ 
+     out = out[bwd_indices]      # [T, H, C]
+ 
+diff --git a/trellis/modules/sparse/conv/conv_spconv.py b/trellis/modules/sparse/conv/conv_spconv.py
+index 524bcd4..76c7930 100755
+--- a/trellis/modules/sparse/conv/conv_spconv.py
++++ b/trellis/modules/sparse/conv/conv_spconv.py
+@@ -15,6 +15,9 @@ class SparseConv3d(nn.Module):
+         elif SPCONV_ALGO == 'implicit_gemm':
+             algo = spconv.ConvAlgo.MaskImplicitGemm
+         if stride == 1 and (padding is None):
++            from .torch_submconv import TorchSubMConv3d
++            self.conv = TorchSubMConv3d(in_channels, out_channels, kernel_size, dilation=dilation, bias=bias)
++        elif stride == 1 and (padding is None):
+             self.conv = spconv.SubMConv3d(in_channels, out_channels, kernel_size, dilation=dilation, bias=bias, indice_key=indice_key, algo=algo)
+         else:
+             self.conv = spconv.SparseConv3d(in_channels, out_channels, kernel_size, stride=stride, dilation=dilation, padding=padding, bias=bias, indice_key=indice_key, algo=algo)
+diff --git a/trellis/modules/sparse/conv/torch_submconv.py b/trellis/modules/sparse/conv/torch_submconv.py
+new file mode 100644
+index 0000000..a686268
+--- /dev/null
++++ b/trellis/modules/sparse/conv/torch_submconv.py
+@@ -0,0 +1,37 @@
++# Local patch for E12 only: spconv's GPU kernels crash on this GPU (no build for its CUDA), so its
++# same-coordinate 3D convolution is done here in plain torch, with the same weight layout.
++import torch
++import torch.nn as nn
++
++
++class TorchSubMConv3d(nn.Module):
++    """out(p) = sum_k W[k] x(p + k - c) over the kernel, at the input's own coordinates."""
++
++    def __init__(self, in_channels, out_channels, kernel_size, dilation=1, bias=True):
++        super().__init__()
++        self.in_channels, self.out_channels, self.k, self.dilation = in_channels, out_channels, kernel_size, dilation
++        self.weight = nn.Parameter(torch.empty(out_channels, kernel_size, kernel_size, kernel_size, in_channels))
++        self.bias = nn.Parameter(torch.zeros(out_channels)) if bias else None
++
++    def forward(self, x):
++        idx, feats = x.indices.long(), x.features          # idx: batch, d0, d1, d2
++        shape = idx.max(0).values + 1 + 2 * self.k * self.dilation
++        mul = torch.stack([shape[1] * shape[2] * shape[3], shape[2] * shape[3], shape[3], torch.ones_like(shape[3])])
++        key = (idx * mul).sum(1)
++        order = key.argsort()
++        skey = key[order]
++        out = feats.new_zeros(len(feats), self.out_channels)
++        c = (self.k - 1) // 2
++        for a in range(self.k):
++            for b in range(self.k):
++                for d in range(self.k):
++                    off = torch.tensor([0, a - c, b - c, d - c], device=idx.device) * self.dilation
++                    q = ((idx + off) * mul).sum(1)
++                    pos = torch.searchsorted(skey, q).clamp(max=len(skey) - 1)
++                    hit = skey[pos] == q
++                    if hit.any():
++                        src = order[pos[hit]]
++                        out[hit] += feats[src] @ self.weight[:, a, b, d, :].t()
++        if self.bias is not None:
++            out = out + self.bias
++        return x.replace_feature(out)

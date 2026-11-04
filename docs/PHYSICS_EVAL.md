@@ -167,5 +167,8 @@ bash scripts/run_e13.sh                            # both grasp orders on the sc
 
 `e12_clean_meshes.py` makes one watertight solid: it sets the up axis, scales to the prompted archetype's longest side,
 keeps the largest body and voxel-remeshes what is not closed. `e13_prepare_gso.py` keeps scans at their native scale and
-merges vertices by position first, since texture seams are what leave most scans open. `build_neural_manifest.py` plans
+merges vertices by position first, since texture seams are what leave most scans open. TRELLIS (commit 193e050) runs with
+`scripts/patches/trellis_e12.patch`: PyTorch replacements for `spconv`'s submanifold convolution and for the sparse attention
+kernels, which have no build for this torch and GPU; `e12_generate.py` renames Hunyuan3D-2's DINOv2 weights for
+transformers 5. Both need `PYTHONPATH=output/e12/src/stubs`. `build_neural_manifest.py` plans
 grasps with the same planner and exports CoACD collision. An object that fails counts as a failure in the summaries.
