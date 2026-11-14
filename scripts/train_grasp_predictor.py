@@ -175,6 +175,38 @@ def rank1_rates(D, idx, score) -> dict:
 # splits
 # ---------------------------------------------------------------------------
 
+def subsample_objects(D, idx: np.ndarray, frac: float, seed: int) -> np.ndarray:
+    """Keep the grasps of a random `frac` of the objects in `idx` (whole objects)."""
+    if frac >= 1.0:
+        return idx
+    if frac <= 0.0:
+        return idx[:0]
+    objs = np.unique(D["g_obj"][idx])
+    rng = np.random.default_rng(seed + 7919)
+    keep = set(rng.choice(objs, size=max(1, int(round(frac * len(objs)))), replace=False).tolist())
+    return idx[np.array([o in keep for o in D["g_obj"][idx]], bool)]
+
+
+def eval_external(model, paths: list[Path], mu, sd, device) -> dict:
+    """AUC and top-1 lift per obj_group on datasets never used in training."""
+    E = load(paths)
+    S_e, R_e = features(E)
+    Sn_e = ((S_e - mu) / sd).astype(np.float32)
+    y_e = E["g_success"].astype(np.float32)
+    idx = np.arange(len(y_e))
+    p = predict(model, E, idx, Sn_e, R_e, device)
+    group = E["obj_group"][E["g_obj"]]
+    out = {}
+    for gname in sorted(set(group.tolist())):
+        m = group == gname
+        out[gname] = {"n_grasps": int(m.sum()), "n_objects": int(len(np.unique(E["g_obj"][m]))),
+                      "lift_rate": float(y_e[m].mean()),
+                      "auc_model": auc(p[m], y_e[m]), "auc_planner": auc(E["g_score"][m], y_e[m]),
+                      "rank1": rank1_rates(E, idx[m], p[m])}
+    return {"data": [str(q) for q in paths], "groups": out,
+            "pred": p.astype(np.float32).tolist() if len(p) < 20000 else None}
+
+
 def make_split(D, mode: str, seed: int, test_frac: float = 0.2):
     rng = np.random.default_rng(seed)
     o = D["g_obj"]
@@ -219,14 +251,40 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=512)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--seed", type=int, default=0)
+    # Scaling study (ROADMAP §3). All off by default, so earlier runs reproduce.
+    ap.add_argument("--train-frac", type=float, default=1.0,
+                    help="keep this fraction of the training objects of --data (whole objects)")
+    ap.add_argument("--extra-train", type=Path, nargs="*", default=[],
+                    help="datasets added to training whole, never to val or test")
+    ap.add_argument("--extra-sources", type=int, default=0,
+                    help="use only the first K sources (manifests, sorted) of --extra-train; 0 = all")
+    ap.add_argument("--eval-data", type=Path, nargs="*", default=[],
+                    help="held-out datasets scored per obj_group after training (results.json 'external')")
     args = ap.parse_args()
     torch.manual_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    D = load(args.data)
+    D = load(list(args.data) + list(args.extra_train))
     S, R = features(D)
     y = D["g_success"].astype(np.float32)
-    tr, va, te = make_split(D, args.split, args.seed)
+    n_main = sum(len(np.load(p)["obj_points"]) for p in args.data)
+    is_main = D["g_obj"] < n_main
+    if args.extra_train:
+        # Split only the --data objects; extra objects can only go to training.
+        main_idx = np.where(is_main)[0]
+        Dm = {k: (v[main_idx] if k.startswith("g_") else v) for k, v in D.items()}
+        tr_m, va_m, te_m = make_split(Dm, args.split, args.seed)
+        tr, va, te = main_idx[tr_m], main_idx[va_m], main_idx[te_m]
+    else:
+        tr, va, te = make_split(D, args.split, args.seed)
+    tr = subsample_objects(D, tr, args.train_frac, args.seed)
+    if args.extra_train:
+        extra = np.where(~is_main)[0]
+        if args.extra_sources:
+            src = D["obj_source"][D["g_obj"][extra]]
+            keep = set(sorted(set(src.tolist()))[:args.extra_sources])
+            extra = extra[np.array([s in keep for s in src], bool)]
+        tr = np.concatenate([tr, extra])
     mu, sd = S[tr].mean(0), S[tr].std(0) + 1e-6
     Sn = ((S - mu) / sd).astype(np.float32)
     print(f"{len(y)} feasible grasps ({y.mean():.1%} lift) on {len(D['obj_points'])} objects; "
@@ -273,7 +331,14 @@ def main() -> None:
                        "planner_score": rank1_rates(D, te, D["g_score"][te])},
         "test_groups": sorted(set(D["obj_group"][D["g_obj"][te]].tolist()))[:200],
         "train_seconds": time.time() - t0,
+        "train_frac": args.train_frac,
+        "extra_train": [str(p) for p in args.extra_train],
+        "extra_sources": args.extra_sources,
+        "n_train_objects": int(len(np.unique(D["g_obj"][tr]))),
+        "n_train_extra": int((~is_main[tr]).sum()),
     }
+    if args.eval_data:
+        res["external"] = eval_external(model, list(args.eval_data), mu, sd, device)
     args.out.mkdir(parents=True, exist_ok=True)
     torch.save({"state_dict": model.state_dict(), "mu": mu, "sd": sd,
                 "n_scalar": S.shape[1]}, args.out / "model.pt")

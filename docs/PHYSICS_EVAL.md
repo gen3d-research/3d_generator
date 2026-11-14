@@ -109,6 +109,16 @@ python3 -m venv ~/venv/gen3d_learn
     --data output/grasp_dataset/journal.npz --split source --out output/grasp_predictor/run0
 ```
 
+### Scaling options
+
+Off by default, so earlier runs reproduce. `--train-frac F` keeps a random fraction F of the training objects
+(whole objects; 0 keeps none). `--extra-train D.npz` adds datasets to training only, never to validation or test;
+`--extra-sources K` keeps the first K of their manifests (sorted), so K = 5 ⊂ 10 ⊂ 20 runs are nested.
+`--eval-data D.npz` scores datasets never used in training after the run, per `obj_group` (AUC of the model and of the
+planner score, top-1 lift), under `external` in `results.json`. `scripts/run_predictor_scaling.sh data | curve | train`
+builds plain-CEM grasp data on fresh seeds and runs the learning curve and the archetype + CEM mixing;
+`scripts/summarize_predictor_scaling.py` tabulates them.
+
 ## Predictor in the generator
 
 The numpy predictor (`src/grasp_predictor.py`, weights exported as `model.npz`) can steer generation
