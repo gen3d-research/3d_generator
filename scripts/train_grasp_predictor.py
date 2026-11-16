@@ -106,7 +106,14 @@ class GraspNet(nn.Module):
             nn.Linear(64, 1),
         )
 
+    use_points = True                          # feature ablation (--features); the
+    use_scalars = True                         # numpy export assumes both are on
+
     def forward(self, pts, scal):              # pts [B, 3, P]
+        if not self.use_points:
+            pts = torch.zeros_like(pts)
+        if not self.use_scalars:
+            scal = torch.zeros_like(scal)
         f = self.point(pts).max(dim=2).values
         return self.head(torch.cat([f, scal], dim=1)).squeeze(1)
 
@@ -260,6 +267,9 @@ def main() -> None:
                     help="use only the first K sources (manifests, sorted) of --extra-train; 0 = all")
     ap.add_argument("--eval-data", type=Path, nargs="*", default=[],
                     help="held-out datasets scored per obj_group after training (results.json 'external')")
+    ap.add_argument("--features", default="all", choices=["all", "scalars", "points"],
+                    help="ablation: 'scalars' zeroes the point branch's input, 'points' the scalars; "
+                         "ablated models are not exported to numpy")
     args = ap.parse_args()
     torch.manual_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -291,6 +301,8 @@ def main() -> None:
           f"split={args.split}: train {len(tr)} / val {len(va)} / test {len(te)}; device={device}")
 
     model = GraspNet(S.shape[1]).to(device)
+    model.use_points = args.features in ("all", "points")
+    model.use_scalars = args.features in ("all", "scalars")
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, args.epochs)
     pos_w = torch.tensor((1 - y[tr].mean()) / max(y[tr].mean(), 1e-3), device=device)
@@ -336,12 +348,17 @@ def main() -> None:
         "extra_sources": args.extra_sources,
         "n_train_objects": int(len(np.unique(D["g_obj"][tr]))),
         "n_train_extra": int((~is_main[tr]).sum()),
+        "features": args.features,
     }
     if args.eval_data:
         res["external"] = eval_external(model, list(args.eval_data), mu, sd, device)
     args.out.mkdir(parents=True, exist_ok=True)
     torch.save({"state_dict": model.state_dict(), "mu": mu, "sd": sd,
-                "n_scalar": S.shape[1]}, args.out / "model.pt")
+                "n_scalar": S.shape[1], "features": args.features}, args.out / "model.pt")
+    if args.features != "all":
+        (args.out / "results.json").write_text(json.dumps(res, indent=1))
+        print(json.dumps({k: res[k] for k in ("test_lift_rate", "test_auc", "test_rank1")}, indent=1))
+        return
     export_numpy(model, mu, sd, args.out / "model.npz")
     # parity check: the numpy export must reproduce torch's test predictions
     from grasp_predictor import GraspPredictor

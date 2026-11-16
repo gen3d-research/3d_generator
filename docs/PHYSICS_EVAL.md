@@ -119,6 +119,11 @@ planner score, top-1 lift), under `external` in `results.json`. `scripts/run_pre
 builds plain-CEM grasp data on fresh seeds and runs the learning curve and the archetype + CEM mixing;
 `scripts/summarize_predictor_scaling.py` tabulates them.
 
+`--features scalars | points` trains an ablated model: the point branch's input or the 13 scalars are zeroed. Ablated
+models are scored like the full one but not exported to numpy. `build_grasp_dataset.py --mu M --grip N` relabels a
+manifest under another friction coefficient or grip force (defaults 0.5 and 20 N); the archive's `config` records them.
+`scripts/run_dataset_paper_extras.sh ablate | labels` runs both for the grasp-dataset write-up.
+
 ## Predictor in the generator
 
 The numpy predictor (`src/grasp_predictor.py`, weights exported as `model.npz`) can steer generation

@@ -44,9 +44,9 @@ import mujoco_eval as me  # noqa: E402
 _CFG = None
 
 
-def _init(collision: str) -> None:
+def _init(collision: str, mu: float = 0.5, grip: float = 20.0) -> None:
     global _CFG
-    _CFG = me.MujocoEvalConfig(collision=collision, grasps_per_object=64)
+    _CFG = _cfg_for_meta(collision, mu, grip)
 
 
 def _one(args) -> dict | None:
@@ -95,6 +95,8 @@ def main() -> None:
     ap.add_argument("--points", type=int, default=512)
     ap.add_argument("--workers", type=int, default=min(16, os.cpu_count() or 4))
     ap.add_argument("--limit", type=int, default=0, help="first N objects per manifest")
+    ap.add_argument("--mu", type=float, default=0.5, help="friction on every contact (label sensitivity)")
+    ap.add_argument("--grip", type=float, default=20.0, help="grip force per finger, N (label sensitivity)")
     args = ap.parse_args()
 
     jobs = []
@@ -109,7 +111,7 @@ def main() -> None:
     t0 = time.time()
     recs, errors = [], 0
     with ProcessPoolExecutor(args.workers, initializer=_init,
-                             initargs=(args.collision,)) as ex:
+                             initargs=(args.collision, args.mu, args.grip)) as ex:
         for i, r in enumerate(ex.map(_one, jobs, chunksize=4)):
             if r is None or "error" in r:
                 errors += 1
@@ -140,7 +142,7 @@ def main() -> None:
         g_feasible=np.array([row["feasible"] for _, row in g]),
         g_success=np.array([row["success"] for _, row in g]),
         g_reason=np.array([row["reason"] for _, row in g]),
-        config=json.dumps(me.config_dict(_cfg_for_meta(args.collision))),
+        config=json.dumps(me.config_dict(_cfg_for_meta(args.collision, args.mu, args.grip))),
     )
     feas = np.array([row["feasible"] for _, row in g])
     succ = np.array([row["success"] for _, row in g])
@@ -149,8 +151,8 @@ def main() -> None:
           f"({succ.sum() / max(1, feas.sum()):.1%} of feasible) in {time.time() - t0:.0f}s")
 
 
-def _cfg_for_meta(collision: str) -> me.MujocoEvalConfig:
-    return me.MujocoEvalConfig(collision=collision, grasps_per_object=64)
+def _cfg_for_meta(collision: str, mu: float = 0.5, grip: float = 20.0) -> me.MujocoEvalConfig:
+    return me.MujocoEvalConfig(collision=collision, grasps_per_object=64, mu=mu, grip_force_n=grip)
 
 
 if __name__ == "__main__":
