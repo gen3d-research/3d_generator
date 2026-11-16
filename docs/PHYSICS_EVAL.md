@@ -180,6 +180,16 @@ python scripts/download_gso.py                     # Google Scanned Objects from
 bash scripts/run_e13.sh                            # both grasp orders on the scans, then summarize_e13.py
 ```
 
+Selecting among several meshes per prompt (E18): `e12_generate.py --candidate J` and `e12_clean_meshes.py --candidate J`
+write candidate J to `<model>_c<J>/` with seed `s*1000+i+250000*J` (J = 0 is the mesh above);
+`build_neural_manifest.py --table-check --grasp-model M` stores each grasp's predicted lift; `e18_select.py` keeps, per
+prompt, the candidate whose best grasp has the highest prediction; `run_e18.sh setup | gen | clean | build | select |
+grade MODEL` runs the stages and `summarize_e18.py` compares the arms.
+
+`scripts/score_manifest_proxies.py` recomputes the generator's geometric proxies (size, stability, graspability and their
+raw measures) on any manifest's exported meshes, into `output/proxies/`, so proxies can be compared with the physical
+tests above.
+
 `e12_clean_meshes.py` makes one watertight solid: it sets the up axis, scales to the prompted archetype's longest side,
 keeps the largest body and voxel-remeshes what is not closed. `e13_prepare_gso.py` keeps scans at their native scale and
 merges vertices by position first, since texture seams are what leave most scans open. TRELLIS (commit 193e050) runs with

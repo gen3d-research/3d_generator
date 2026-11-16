@@ -104,10 +104,13 @@ def main():
     ap.add_argument("--seeds", type=int, nargs="+", required=True)
     ap.add_argument("--root", type=Path, default=ROOT / "output/e12")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--candidate", type=int, default=0,
+                    help="E18: candidate j > 0 goes to <model>_c<j>/ with seed s*1000+i+250000*j; 0 is the E12 mesh")
     args = ap.parse_args()
     run = BACKENDS[args.model]()
+    sub = args.model if args.candidate == 0 else f"{args.model}_c{args.candidate}"
     for s in args.seeds:
-        d = args.root / args.model / f"seed_{s}"
+        d = args.root / sub / f"seed_{s}"
         (d / "raw").mkdir(parents=True, exist_ok=True)
         prompts = json.load(open(args.root / "prompts" / f"seed_{s}.json"))
         if args.limit:
@@ -119,7 +122,7 @@ def main():
             if key in log:
                 continue
             t0 = time.time()
-            rec = {"prompt": p["prompt"], "name": p["name"], "seed": s * 1000 + i}
+            rec = {"prompt": p["prompt"], "name": p["name"], "seed": s * 1000 + i + 250000 * args.candidate}
             try:
                 torch.cuda.reset_peak_memory_stats()
                 rec["path"] = run(p["prompt"], rec["seed"], d / "raw" / key)

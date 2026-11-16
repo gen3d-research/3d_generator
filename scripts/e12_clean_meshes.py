@@ -104,8 +104,10 @@ def main():
     ap.add_argument("--seed", type=int, required=True)
     ap.add_argument("--root", type=Path, default=Path("output/e12"))
     ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--candidate", type=int, default=0, help="E18: clean <model>_c<j>/ (see e12_generate.py)")
     args = ap.parse_args()
-    d = args.root / args.model / f"seed_{args.seed}"
+    sub = args.model if args.candidate == 0 else f"{args.model}_c{args.candidate}"
+    d = args.root / sub / f"seed_{args.seed}"
     log = json.load(open(d / "generate.json"))
     prompts = json.load(open(args.root / "prompts" / f"seed_{args.seed}.json"))
     (d / "clean").mkdir(exist_ok=True)
