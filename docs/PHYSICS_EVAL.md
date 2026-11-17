@@ -185,6 +185,10 @@ write candidate J to `<model>_c<J>/` with seed `s*1000+i+250000*J` (J = 0 is the
 `build_neural_manifest.py --table-check --grasp-model M` stores each grasp's predicted lift; `e18_select.py` keeps, per
 prompt, the candidate whose best grasp has the highest prediction; `run_e18.sh setup | gen | clean | build | select |
 grade MODEL` runs the stages and `summarize_e18.py` compares the arms.
+`e18_fallback.py --model M --seeds ...` reuses those exports with the table check as a preference instead of a filter:
+grasps that clear the table first, then the planner's other grasps, each group by predicted lift; it writes every
+candidate to `<model>_fb_c<J>/` and the selection to `<model>_fbsel/`. Grade them like the E18 arms, then
+`summarize_e18b.py --model M --out ...`.
 
 `scripts/score_manifest_proxies.py` recomputes the generator's geometric proxies (size, stability, graspability and their
 raw measures) on any manifest's exported meshes, into `output/proxies/`, so proxies can be compared with the physical
